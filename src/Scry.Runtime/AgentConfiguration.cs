@@ -12,6 +12,8 @@ public sealed class RuntimeHostOptions
 
     public TimeSpan SessionLease { get; init; } = TimeSpan.FromMinutes(30);
 
+    public IReadOnlyList<string> Aliases { get; init; } = [];
+
     public int MaximumPreviewLength { get; init; } = 256;
 
     public int MaximumHandlesPerSession { get; init; } = 4096;
@@ -37,12 +39,21 @@ public sealed class RuntimeHostOptions
     public int MaximumTypeMembers { get; init; } = 2000;
 
     public long MaximumAssemblyBytes { get; init; } = 256L * 1024 * 1024;
+
+    public TimeSpan JobRetention { get; init; } = TimeSpan.FromMinutes(15);
+
+    public int MaximumJobs { get; init; } = 1024;
+
+    public int MaximumJobLogEntries { get; init; } = 1000;
+
+    public int MaximumJobLogMessageLength { get; init; } = 4096;
 }
 
 public sealed class AgentConfiguration
 {
     private readonly Dictionary<string, RegisteredRoot> _roots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RegisteredOperation> _operations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ContextualOperation> _contextualOperations = new(StringComparer.Ordinal);
 
     public IReadOnlyDictionary<string, RegisteredRoot> Roots => _roots;
 
@@ -65,11 +76,34 @@ public sealed class AgentConfiguration
     {
         ValidateName(name);
         ArgumentNullException.ThrowIfNull(handler);
-        if (!_operations.TryAdd(name, new(name, handler, description)))
+        if (_contextualOperations.ContainsKey(name) ||
+            !_operations.TryAdd(name, new(name, handler, description)))
         {
             throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
         }
     }
+
+    public void AddContextualOperation(
+        string name,
+        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
+        string? description = null)
+    {
+        ValidateName(name);
+        ArgumentNullException.ThrowIfNull(handler);
+        if (_operations.ContainsKey(name) ||
+            !_contextualOperations.TryAdd(name, new(name, handler, description)))
+        {
+            throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
+        }
+    }
+
+    internal IEnumerable<(string Name, string? Description)> DescribeOperations() =>
+        _operations.Values
+            .Select(operation => (operation.Name, operation.Description))
+            .Concat(_contextualOperations.Values.Select(operation => (operation.Name, operation.Description)));
+
+    internal bool TryGetContextualOperation(string name, out ContextualOperation operation) =>
+        _contextualOperations.TryGetValue(name, out operation!);
 
     private static void ValidateName(string name)
     {
@@ -86,6 +120,41 @@ public sealed record RegisteredOperation(
     string Name,
     Func<JsonElement, CancellationToken, ValueTask<object?>> Handler,
     string? Description);
+
+internal sealed record ContextualOperation(
+    string Name,
+    Func<JsonElement, OperationExecutionContext, ValueTask<object?>> Handler,
+    string? Description);
+
+public sealed class OperationExecutionContext
+{
+    private readonly Action<string, string>? _log;
+
+    internal OperationExecutionContext(
+        CancellationToken cancellationToken,
+        string operationId,
+        string correlationId,
+        Action<string, string>? log = null)
+    {
+        CancellationToken = cancellationToken;
+        OperationId = operationId;
+        CorrelationId = correlationId;
+        _log = log;
+    }
+
+    public CancellationToken CancellationToken { get; }
+
+    public string OperationId { get; }
+
+    public string CorrelationId { get; }
+
+    public void Log(string message, string level = "information")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(level);
+        _log?.Invoke(level, message);
+    }
+}
 
 internal sealed class ScryOperationException(
     string code,

@@ -73,7 +73,10 @@ public static class TargetDiscovery
         var matches = (await FindAsync(cancellationToken).ConfigureAwait(false))
             .Where(item =>
                 string.Equals(item.Descriptor.Target.TargetId, identityOrAlias, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(item.Descriptor.Target.Alias, identityOrAlias, StringComparison.OrdinalIgnoreCase))
+                string.Equals(item.Descriptor.Target.Alias, identityOrAlias, StringComparison.OrdinalIgnoreCase) ||
+                item.Descriptor.Target.Aliases?.Contains(
+                    identityOrAlias,
+                    StringComparer.OrdinalIgnoreCase) == true)
             .ToArray();
 
         return matches.Length switch
@@ -105,6 +108,7 @@ public static class TargetDiscovery
             descriptor.Target is null ||
             string.IsNullOrWhiteSpace(descriptor.Target.TargetId) ||
             string.IsNullOrWhiteSpace(descriptor.Target.Alias) ||
+            descriptor.Target.Aliases?.Any(string.IsNullOrWhiteSpace) == true ||
             descriptor.Target.ProcessId <= 0 ||
             string.IsNullOrWhiteSpace(descriptor.PipeName) ||
             string.IsNullOrWhiteSpace(descriptor.CapabilityToken))

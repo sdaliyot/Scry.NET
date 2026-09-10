@@ -5,7 +5,7 @@
 | Project | Responsibility |
 |---|---|
 | `Scry.Contracts` | Wire contracts, framing, target descriptors, discovery |
-| `Scry.Runtime` | Named-pipe server, sessions, handles, reflection, Roslyn execution, assembly catalog |
+| `Scry.Runtime` | Named-pipe server, sessions, handles, reflection, Roslyn execution, assembly catalog, process-scoped jobs |
 | `Scry.Sdk` | Embedded `AgentHost`, registration builder, protocol client |
 | `Scry.Wpf` | Optional dispatcher-safe WPF projections, waits/assertions, screenshots |
 | `Scry.WinForms` | Optional control-owner-marshalled WinForms projections, waits/assertions, screenshots |
@@ -19,9 +19,9 @@ Libraries use `ScryLibraryTargetFrameworks` from `Directory.Build.props`. It cur
 
 ## Protocol and security
 
-Frames are a 4-byte little-endian length followed by UTF-8 JSON. Protocol version 1 requires `handshake` first. The handshake authenticates a 256-bit random capability token, negotiates the version, creates or resumes a target-qualified session, and returns capabilities. Subsequent requests use structured success/error envelopes. Ordinary operation exceptions cross the boundary with type, message, stack, HResult, source, and recursively captured inner exceptions. Fatal runtime failures such as process termination, stack overflow, corrupted state, or fail-fast can bypass this boundary.
+Frames are a 4-byte little-endian length followed by UTF-8 JSON. Protocol version 1 requires `handshake` first. The handshake authenticates a 256-bit random capability token, negotiates the version, creates or resumes a target-qualified session, and returns capabilities. Subsequent requests use structured success/error envelopes. Every handled request receives a target-generated `operationId`; a supplied `correlationId` is echoed, or defaults to that operation ID. Ordinary operation exceptions cross the boundary with type, message, stack, HResult, source, and recursively captured inner exceptions. Fatal runtime failures such as process termination, stack overflow, corrupted state, or fail-fast can bypass this boundary.
 
-Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. The named pipe uses `PipeOptions.CurrentUserOnly`; descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
+Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. The named pipe uses `PipeOptions.CurrentUserOnly`; descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
 
 Sessions belong to one target. Object references contain target, session, and handle IDs, preventing accidental cross-target/session use. Handles are strong references with sliding leases, stable identity within a session, explicit release, and cleanup on expiry/session disposal. Previews are bounded and are not object serialization.
 
@@ -39,10 +39,14 @@ using var host = AgentHost.Start(
             currentState.Reset();
             return ValueTask.FromResult<object?>(null);
         }),
-    new AgentHostOptions { Alias = "my-test-target" });
+    new AgentHostOptions
+    {
+        Alias = "my-test-target",
+        Aliases = ["checkout-a", "worker"]
+    });
 ```
 
-`RegisterValue` retains a specific object, while `RegisterRoot` evaluates its factory for each request. Registered operations receive structured JSON rather than source text. Session and handle limits, lease durations, alias, and preview length are configurable.
+`RegisterValue` retains a specific object, while `RegisterRoot` evaluates its factory for each request. Registered operations receive structured JSON rather than source text. `RegisterJobOperation` additionally receives an `OperationExecutionContext` with the operation ID, correlation ID, cooperative `CancellationToken`, and bounded job logger. Session, handle, and job limits; lease and retention durations; aliases; preview length; and log bounds are configurable. A retained job keeps its qualified session addressable until the job is removed.
 
 ### Desktop adapter integration
 
@@ -86,6 +90,11 @@ All non-handshake requests use the negotiated session. Subjects are selected wit
 | `list-assemblies` | none |
 | `find-types` | query, assembly, loadContext, namespace, includeNonPublic, limit |
 | `describe-type` | type, assembly, loadContext, includeNonPublic |
+| `job.start` | operation, payload, correlationId |
+| `job.status` | job |
+| `job.wait` | job, timeoutMilliseconds (0-300000) |
+| `job.cancel` | job |
+| `job.logs` | job, cursor, limit (1-1000) |
 
 Values are returned as `RemoteValue`. Existing scalar types remain inline as `kind: "scalar"`, reference types receive an `ExternalReference`, and other value types are returned as `kind: "value"` with the negotiated `bounded-value-projection` capability. Struct projections recurse through value types to four levels and 64 total members, represent nested strings longer than 1,024 characters with a truncated `$value` marker, report inaccessible or throwing members with `$error`, and stop at reference-type members with a type marker. They never consume leased handles, so repeated reads of an unchanged struct have value semantics rather than artificial boxed identity.
 
@@ -127,10 +136,55 @@ Host defaults are configurable through `AgentHostOptions`: source length, defaul
 
 Loading is explicit: evaluation never loads assemblies by path or probes arbitrary directories. `list-assemblies` reports identity, location, dynamic status, load context, default-context status, and collectibility. `find-types` performs bounded filtering over loaded types and reports each type's load context. `describe-type` returns bounded member metadata; `assembly` and `loadContext` selectors disambiguate duplicate full type names across assemblies or contexts.
 
+## Jobs
+
+Jobs execute an ordinary non-job protocol operation in the target process. `job.start` returns immediately with a `JobSnapshot` and a `JobHandle` containing `targetId`, `sessionId`, and `jobId`. The endpoint owns execution, cancellation, result/error state, and logs; the CLI stores no state. `scry jobs status|wait|cancel|logs` infers the session from the supplied handle, so a later CLI process can resume it.
+
+States are `queued`, `running`, `succeeded`, `failed`, and `canceled`. A wait timeout returns `{ "job": <current snapshot>, "timedOut": true }`; timeout is never represented as a job state. Cancellation is cooperative. Completed entries expire after `JobRetention`, and admission remains bounded by `MaximumJobs`. Logs are bounded per job and use monotonically increasing cursors. If requested entries have already rolled off, `truncated` is true and `oldestCursor` identifies the first retained entry.
+
+```powershell
+scry jobs start --target my-test-target --correlation build-42 --json `
+  '{"operation":"invoke","payload":{"registeredOperation":"reindex","arguments":{}}}'
+
+scry jobs wait --target my-test-target --json `
+  '{"job":{"targetId":"...","sessionId":"...","jobId":"..."},"timeoutMilliseconds":30000}'
+```
+
+## Multi-target scenarios
+
+`scry scenario` (also `scry batch`) accepts one object from `--input`, `--json`, or redirected stdin. Commands run in input order for `sequential` mode or in parallel for `concurrent` mode. Concurrent results are still emitted in input order. Each command explicitly selects exactly one target ID/alias or descriptor path and receives its own structured response envelope.
+
+```json
+{
+  "mode": "concurrent",
+  "commands": [
+    {
+      "id": "worker-a",
+      "target": "worker-a",
+      "operation": "capabilities",
+      "payload": {},
+      "correlationId": "deployment-17"
+    },
+    {
+      "id": "worker-b",
+      "descriptor": "C:\\path\\to\\target.json",
+      "operation": "invoke",
+      "payload": {
+        "registeredOperation": "reset",
+        "arguments": {}
+      }
+    }
+  ]
+}
+```
+
+Scenario output is a `ScenarioResult` containing `protocolVersion`, normalized `mode`, aggregate `success`, and ordered `results`. Every item preserves its command ID, index, operation, selector, resolved target metadata when available, and either the target's `ProtocolResponse` or a CLI-side `ProtocolError`. A scenario exits `0` only when every command succeeds and `6` when any command fails; individual commands retain the existing exit codes.
+
 ## Extensibility boundaries
 
 - Add protocol operations and capability names without changing framing.
 - Keep runtime adapters (WPF/WinForms) as registered roots/operations rather than coupling UI assemblies into the core.
+- Add Roslyn execution as an opt-in capability without coupling compiler services into the job/runtime layer.
 - Add background jobs as a separate capability with dedicated lifecycle controls; execution in this layer remains request-scoped.
 - Keep attach/injection responsible only for loading and bootstrapping the same runtime endpoint.
 - A future Skill should drive the stable CLI JSON surface rather than acquire in-process state.

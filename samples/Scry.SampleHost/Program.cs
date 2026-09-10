@@ -1,5 +1,11 @@
 using Scry.Sdk;
 
+var alias = args
+    .Select((value, index) => (value, index))
+    .Where(item => item.value == "--alias" && item.index + 1 < args.Length)
+    .Select(item => args[item.index + 1])
+    .FirstOrDefault() ?? "scry-sample";
+var waitForStdin = args.Contains("--wait-for-stdin", StringComparer.Ordinal);
 var state = new SampleState();
 await using var host = AgentHost.Start(
     builder => builder
@@ -13,20 +19,38 @@ await using var host = AgentHost.Start(
                     ? value.GetString()
                     : null
             },
-            "Returns the supplied message."),
-    new AgentHostOptions { Alias = "scry-sample" });
+            "Returns the supplied message.")
+        .RegisterJobOperation(
+            "delay",
+            async (arguments, context) =>
+            {
+                var startedAt = DateTimeOffset.UtcNow.UtcTicks;
+                context.Log("Delay requested.");
+                await Task.Delay(arguments.GetProperty("milliseconds").GetInt32(), context.CancellationToken);
+                context.Log("Delay completed.");
+                return $"{startedAt}:{DateTimeOffset.UtcNow.UtcTicks}:{Environment.ProcessId}";
+            },
+            "Waits cooperatively and returns the process identity."),
+    new AgentHostOptions { Alias = alias, Aliases = ["scry-sample"] });
 
 Console.WriteLine($"Target: {host.TargetId}");
 Console.WriteLine($"Descriptor: {host.DescriptorPath}");
-Console.WriteLine("Press Ctrl+C to stop.");
+Console.WriteLine(waitForStdin ? "Press Enter to stop." : "Press Ctrl+C to stop.");
 
-var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-Console.CancelKeyPress += (_, eventArgs) =>
+if (waitForStdin)
 {
-    eventArgs.Cancel = true;
-    stopping.TrySetResult();
-};
-await stopping.Task.ConfigureAwait(false);
+    await Console.In.ReadLineAsync().ConfigureAwait(false);
+}
+else
+{
+    var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Console.CancelKeyPress += (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        stopping.TrySetResult();
+    };
+    await stopping.Task.ConfigureAwait(false);
+}
 
 internal sealed class SampleState
 {

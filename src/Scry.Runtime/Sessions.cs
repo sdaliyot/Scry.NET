@@ -73,18 +73,19 @@ internal sealed class SessionManager : IDisposable
 
     public SessionState Resume(string id)
     {
-        if (!_sessions.TryGetValue(id, out var session) || session.IsExpired)
+        if (!_sessions.TryGetValue(id, out var session) || !session.TryTouch())
         {
             throw new ScryOperationException("session_not_found", "The requested session does not exist or has expired.");
         }
 
-        session.Touch();
         return session;
     }
 
     public void Remove(string id)
     {
-        if (_sessions.TryRemove(id, out var session))
+        if (_sessions.TryGetValue(id, out var existing) &&
+            existing.TryDisposeIfIdle() &&
+            _sessions.TryRemove(id, out var session))
         {
             session.Dispose();
         }
@@ -95,7 +96,7 @@ internal sealed class SessionManager : IDisposable
         foreach (var pair in _sessions)
         {
             pair.Value.RemoveExpiredHandles();
-            if (pair.Value.IsExpired && !pair.Value.IsInUse &&
+            if (pair.Value.TryExpire() &&
                 _sessions.TryRemove(pair.Key, out var removed))
             {
                 removed.Dispose();
@@ -150,9 +151,23 @@ internal sealed class SessionState : IDisposable
 
     public DateTimeOffset ExpiresAt { get; private set; }
 
-    public bool IsExpired => ExpiresAt <= DateTimeOffset.UtcNow;
+    public bool IsExpired => !IsInUse && ExpiresAt <= DateTimeOffset.UtcNow;
 
     public bool IsInUse => Volatile.Read(ref _activeOperations) > 0;
+
+    public bool TryTouch()
+    {
+        lock (_gate)
+        {
+            if (_disposed || (_activeOperations == 0 && ExpiresAt <= DateTimeOffset.UtcNow))
+            {
+                return false;
+            }
+
+            ExpiresAt = DateTimeOffset.UtcNow.Add(_sessionLease);
+            return true;
+        }
+    }
 
     public void Touch()
     {
@@ -163,7 +178,35 @@ internal sealed class SessionState : IDisposable
         }
     }
 
-    public IDisposable EnterOperation()
+    public bool TryExpire()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _activeOperations > 0 || ExpiresAt > DateTimeOffset.UtcNow)
+            {
+                return false;
+            }
+
+            _disposed = true;
+            return true;
+        }
+    }
+
+    public bool TryDisposeIfIdle()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _activeOperations > 0)
+            {
+                return false;
+            }
+
+            _disposed = true;
+            return true;
+        }
+    }
+
+    public IDisposable EnterOperation(bool renewLeaseOnExit = true)
     {
         lock (_gate)
         {
@@ -171,7 +214,7 @@ internal sealed class SessionState : IDisposable
             Interlocked.Increment(ref _activeOperations);
         }
 
-        return new OperationLease(this);
+        return new OperationLease(this, renewLeaseOnExit);
     }
 
     public ExternalReference Lease(object value, out bool created)
@@ -303,7 +346,9 @@ internal sealed class SessionState : IDisposable
         }
     }
 
-    private sealed class OperationLease(SessionState session) : IDisposable
+    private sealed class OperationLease(
+        SessionState session,
+        bool renewLeaseOnExit) : IDisposable
     {
         private SessionState? _session = session;
 
@@ -312,7 +357,18 @@ internal sealed class SessionState : IDisposable
             var owner = Interlocked.Exchange(ref _session, null);
             if (owner is not null)
             {
-                Interlocked.Decrement(ref owner._activeOperations);
+                owner.ExitOperation(renewLeaseOnExit);
+            }
+        }
+    }
+
+    private void ExitOperation(bool renewLease)
+    {
+        lock (_gate)
+        {
+            if (Interlocked.Decrement(ref _activeOperations) == 0 && !_disposed && renewLease)
+            {
+                ExpiresAt = DateTimeOffset.UtcNow.Add(_sessionLease);
             }
         }
     }

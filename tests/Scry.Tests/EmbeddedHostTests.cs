@@ -6,6 +6,7 @@ using Scry.Sdk;
 
 namespace Scry.Tests;
 
+[Collection("Scry integration")]
 public sealed class EmbeddedHostTests
 {
     [Fact]

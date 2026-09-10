@@ -23,7 +23,7 @@ internal sealed class OperationDispatcher(
         string operation,
         JsonElement payload,
         SessionState session,
-        CancellationToken cancellationToken) =>
+        OperationExecutionContext context) =>
         operation switch
         {
             "capabilities" => Capabilities(),
@@ -31,11 +31,11 @@ internal sealed class OperationDispatcher(
             "inspect" => Inspect(payload, session),
             "get" => Get(payload, session),
             "set" => Set(payload, session),
-            "invoke" => await InvokeAsync(payload, session, cancellationToken).ConfigureAwait(false),
+            "invoke" => await InvokeAsync(payload, session, context).ConfigureAwait(false),
             "enumerate" => Enumerate(payload, session),
             "release" => Release(payload, session),
-            "evaluate" => await EvaluateAsync(payload, session, cancellationToken).ConfigureAwait(false),
-            "execute" => await ExecuteAsync(payload, session, cancellationToken).ConfigureAwait(false),
+            "evaluate" => await EvaluateAsync(payload, session, context.CancellationToken).ConfigureAwait(false),
+            "execute" => await ExecuteAsync(payload, session, context.CancellationToken).ConfigureAwait(false),
             "load-assembly" => LoadAssembly(payload),
             "list-assemblies" => ListAssemblies(),
             "find-types" => FindTypes(payload),
@@ -49,7 +49,7 @@ internal sealed class OperationDispatcher(
         protocolVersion = ProtocolConstants.Version,
         operations = ProtocolConstants.CoreCapabilities,
         features = ProtocolConstants.FeatureCapabilities,
-        registeredOperations = configuration.Operations.Values
+        registeredOperations = configuration.DescribeOperations()
             .Select(item => new { item.Name, item.Description })
             .OrderBy(item => item.Name, StringComparer.Ordinal)
     };
@@ -179,12 +179,25 @@ internal sealed class OperationDispatcher(
     private async ValueTask<object?> InvokeAsync(
         JsonElement payload,
         SessionState session,
-        CancellationToken cancellationToken)
+        OperationExecutionContext context)
     {
         if (payload.TryGetProperty("registeredOperation", out var operationElement))
         {
             var operationName = operationElement.GetString()
                 ?? throw new ScryOperationException("invalid_request", "registeredOperation must be a string.");
+            if (configuration.TryGetContextualOperation(operationName, out var contextualOperation))
+            {
+                var contextualArguments = payload.TryGetProperty("arguments", out var contextualArgs)
+                    ? contextualArgs
+                    : JsonSerializer.SerializeToElement(new { }, ScryJson.Options);
+                return new
+                {
+                    value = Encode(
+                        await contextualOperation.Handler(contextualArguments, context).ConfigureAwait(false),
+                        session)
+                };
+            }
+
             if (!configuration.Operations.TryGetValue(operationName, out var operation))
             {
                 throw new ScryOperationException(
@@ -198,7 +211,7 @@ internal sealed class OperationDispatcher(
             return new
             {
                 value = Encode(
-                    await operation.Handler(arguments, cancellationToken).ConfigureAwait(false),
+                    await operation.Handler(arguments, context.CancellationToken).ConfigureAwait(false),
                     session,
                     GetOptionalBoolean(payload, "asReference"))
             };
@@ -250,7 +263,7 @@ internal sealed class OperationDispatcher(
         var result = selected.Method.Invoke(subject, selected.Arguments);
         if (result is Task task)
         {
-            await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await task.ConfigureAwait(false);
             result = task.GetType().IsGenericType
                 ? task.GetType().GetProperty("Result")!.GetValue(task)
                 : null;
@@ -265,7 +278,7 @@ internal sealed class OperationDispatcher(
             result.GetType().GetGenericTypeDefinition() == typeof(ValueTask<>))
         {
             var valueTaskAsTask = (Task)result.GetType().GetMethod("AsTask")!.Invoke(result, null)!;
-            await valueTaskAsTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await valueTaskAsTask.ConfigureAwait(false);
             result = valueTaskAsTask.GetType().GetProperty("Result")!.GetValue(valueTaskAsTask);
         }
 

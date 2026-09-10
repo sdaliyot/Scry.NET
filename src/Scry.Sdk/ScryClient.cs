@@ -95,10 +95,24 @@ public sealed class ScryClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<ProtocolResponse> RequestAsync(
+    public Task<ProtocolResponse> RequestAsync(
         string operation,
         object? payload = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RequestCoreAsync(operation, payload, cancellationToken, null);
+
+    public Task<ProtocolResponse> RequestCorrelatedAsync(
+        string operation,
+        object? payload,
+        string? correlationId,
+        CancellationToken cancellationToken = default) =>
+        RequestCoreAsync(operation, payload, cancellationToken, correlationId);
+
+    private async Task<ProtocolResponse> RequestCoreAsync(
+        string operation,
+        object? payload,
+        CancellationToken cancellationToken,
+        string? correlationId)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         await _requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -110,7 +124,10 @@ public sealed class ScryClient : IAsyncDisposable
                 ProtocolConstants.Version,
                 Guid.NewGuid().ToString("N"),
                 operation,
-                JsonSerializer.SerializeToElement(payload ?? new { }, ScryJson.Options));
+                JsonSerializer.SerializeToElement(payload ?? new { }, ScryJson.Options))
+            {
+                CorrelationId = correlationId
+            };
             ioStarted = true;
             await FrameCodec.WriteAsync(_pipe, request, cancellationToken).ConfigureAwait(false);
             var response = await FrameCodec.ReadAsync<ProtocolResponse>(_pipe, cancellationToken)
@@ -167,6 +184,49 @@ public sealed class ScryClient : IAsyncDisposable
         DescribeTypeRequest request,
         CancellationToken cancellationToken = default) =>
         RequestResultAsync<TypeDescription>("describe-type", request, cancellationToken);
+
+    public Task<ProtocolResponse> StartJobAsync(
+        string operation,
+        object? payload = null,
+        string? correlationId = null,
+        CancellationToken cancellationToken = default) =>
+        RequestCoreAsync(
+            "job.start",
+            new JobStartRequest(
+                operation,
+                JsonSerializer.SerializeToElement(payload ?? new { }, ScryJson.Options),
+                correlationId),
+            cancellationToken,
+            correlationId);
+
+    public Task<ProtocolResponse> GetJobStatusAsync(
+        JobHandle job,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync("job.status", new JobQueryRequest(job), cancellationToken);
+
+    public Task<ProtocolResponse> WaitForJobAsync(
+        JobHandle job,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var milliseconds = checked((int)Math.Ceiling(timeout.TotalMilliseconds));
+        return RequestAsync(
+            "job.wait",
+            new JobWaitRequest(job, milliseconds),
+            cancellationToken);
+    }
+
+    public Task<ProtocolResponse> CancelJobAsync(
+        JobHandle job,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync("job.cancel", new JobQueryRequest(job), cancellationToken);
+
+    public Task<ProtocolResponse> ReadJobLogsAsync(
+        JobHandle job,
+        long cursor = 0,
+        int limit = 100,
+        CancellationToken cancellationToken = default) =>
+        RequestAsync("job.logs", new JobLogsRequest(job, cursor, limit), cancellationToken);
 
     public async ValueTask DisposeAsync()
     {

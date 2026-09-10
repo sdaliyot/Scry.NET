@@ -17,6 +17,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
     private readonly ConcurrentDictionary<int, Task> _handlers = new();
     private readonly SessionManager _sessions;
     private readonly OperationDispatcher _dispatcher;
+    private readonly JobManager _jobs;
     private readonly Task _acceptTask;
     private readonly EventHandler _processExitHandler;
     private int _connectionId;
@@ -30,8 +31,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         {
             throw new ArgumentException("The target alias cannot be empty.", nameof(options));
         }
-        if (options.HandleLease <= TimeSpan.Zero ||
+        if (options.Aliases.Any(string.IsNullOrWhiteSpace) ||
+            options.HandleLease <= TimeSpan.Zero ||
             options.SessionLease <= TimeSpan.Zero ||
+            options.JobRetention <= TimeSpan.Zero ||
             options.MaximumPreviewLength < 1 ||
             options.MaximumHandlesPerSession < 1 ||
             options.MaximumSessions < 1 ||
@@ -45,7 +48,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             options.MaximumLogMessageLength < 1 ||
             options.MaximumTypeResults < 1 ||
             options.MaximumTypeMembers < 1 ||
-            options.MaximumAssemblyBytes < 1)
+            options.MaximumAssemblyBytes < 1 ||
+            options.MaximumJobs < 1 ||
+            options.MaximumJobLogEntries < 1 ||
+            options.MaximumJobLogMessageLength < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options),
@@ -64,7 +70,14 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             Environment.Version.ToString(),
             RuntimeInformation.FrameworkDescription,
             RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
-            process.StartTime.ToUniversalTime());
+            process.StartTime.ToUniversalTime())
+        {
+            Aliases = options.Aliases
+                .Append(options.Alias)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+        };
         Descriptor = new(
             ProtocolConstants.Version,
             Metadata,
@@ -83,6 +96,13 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         var assemblies = new AssemblyCatalog(options);
         var execution = new ExecutionEngine(configuration, options, assemblies);
         _dispatcher = new(Metadata, configuration, assemblies, execution);
+        _jobs = new(
+            _dispatcher,
+            targetId,
+            options.JobRetention,
+            options.MaximumJobs,
+            options.MaximumJobLogEntries,
+            options.MaximumJobLogMessageLength);
         PublishDescriptor();
         _processExitHandler = (_, _) => CleanupDescriptor();
         AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
@@ -137,6 +157,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         {
         }
 
+        _jobs.Dispose();
         _sessions.Dispose();
         CleanupDescriptor();
         _stopping.Dispose();
@@ -297,6 +318,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 }
 
                 ProtocolResponse response;
+                var operationId = Guid.NewGuid().ToString("N");
+                var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId)
+                    ? operationId
+                    : request.CorrelationId;
                 try
                 {
                     if (request.ProtocolVersion != ProtocolConstants.Version)
@@ -308,12 +333,24 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
                     session.Touch();
                     using var operationLease = session.EnterOperation();
-                    var operationResult = await _dispatcher.DispatchAsync(
-                        request.Operation,
-                        request.Payload,
-                        session,
-                        cancellationToken).ConfigureAwait(false);
-                    response = ProtocolResponse.Succeeded(request.RequestId, session.Id, operationResult);
+                    var operationResult = request.Operation.StartsWith("job.", StringComparison.Ordinal)
+                        ? await _jobs.DispatchAsync(
+                            request.Operation,
+                            request.Payload,
+                            session,
+                            correlationId,
+                            cancellationToken).ConfigureAwait(false)
+                        : await _dispatcher.DispatchAsync(
+                            request.Operation,
+                            request.Payload,
+                            session,
+                            new(cancellationToken, operationId, correlationId)).ConfigureAwait(false);
+                    response = ProtocolResponse.Succeeded(
+                        request.RequestId,
+                        session.Id,
+                        operationResult,
+                        operationId,
+                        correlationId);
                 }
                 catch (Exception exception)
                 {
@@ -335,7 +372,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                             actual.Message,
                             ExceptionDetail.FromException(actual),
                             (actual as ScryOperationException)?.ErrorData,
-                            (actual as ScryCompilationException)?.Diagnostics));
+                            (actual as ScryCompilationException)?.Diagnostics),
+                        operationId,
+                        correlationId);
                 }
 
                 await FrameCodec.WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);

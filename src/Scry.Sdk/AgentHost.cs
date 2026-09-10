@@ -14,6 +14,8 @@ public sealed class AgentHostOptions
 
     public TimeSpan SessionLease { get; init; } = TimeSpan.FromMinutes(30);
 
+    public IReadOnlyList<string> Aliases { get; init; } = [];
+
     public int MaximumPreviewLength { get; init; } = 256;
 
     public int MaximumHandlesPerSession { get; init; } = 4096;
@@ -39,6 +41,14 @@ public sealed class AgentHostOptions
     public int MaximumTypeMembers { get; init; } = 2000;
 
     public long MaximumAssemblyBytes { get; init; } = 256L * 1024 * 1024;
+
+    public TimeSpan JobRetention { get; init; } = TimeSpan.FromMinutes(15);
+
+    public int MaximumJobs { get; init; } = 1024;
+
+    public int MaximumJobLogEntries { get; init; } = 1000;
+
+    public int MaximumJobLogMessageLength { get; init; } = 4096;
 }
 
 public sealed class AgentBuilder
@@ -74,6 +84,15 @@ public sealed class AgentBuilder
             (arguments, _) => ValueTask.FromResult(handler(arguments)),
             description);
     }
+
+    public AgentBuilder RegisterJobOperation(
+        string name,
+        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
+        string? description = null)
+    {
+        Configuration.AddContextualOperation(name, handler, description);
+        return this;
+    }
 }
 
 public sealed class AgentHost : IAsyncDisposable, IDisposable
@@ -103,6 +122,7 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
             new RuntimeHostOptions
             {
                 Alias = selected.Alias,
+                Aliases = selected.Aliases,
                 HandleLease = selected.HandleLease,
                 SessionLease = selected.SessionLease,
                 MaximumPreviewLength = selected.MaximumPreviewLength,
@@ -117,7 +137,11 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
                 MaximumLogMessageLength = selected.MaximumLogMessageLength,
                 MaximumTypeResults = selected.MaximumTypeResults,
                 MaximumTypeMembers = selected.MaximumTypeMembers,
-                MaximumAssemblyBytes = selected.MaximumAssemblyBytes
+                MaximumAssemblyBytes = selected.MaximumAssemblyBytes,
+                JobRetention = selected.JobRetention,
+                MaximumJobs = selected.MaximumJobs,
+                MaximumJobLogEntries = selected.MaximumJobLogEntries,
+                MaximumJobLogMessageLength = selected.MaximumJobLogMessageLength
             }));
     }
 

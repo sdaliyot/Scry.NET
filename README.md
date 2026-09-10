@@ -7,7 +7,7 @@ Two hosting models are planned:
 - **Embedded mode (implemented):** the target opts in with `Scry.Sdk`, registers roots, values, and operations, and starts an `AgentHost`.
 - **Attach mode (future):** tooling injects or loads the runtime into an existing managed process. Injection is not part of this foundation.
 
-The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, discovery, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, an embedded SDK, and a JSON CLI. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. Jobs, .NET Framework 4.8, injection, and an agent Skill remain deferred.
+The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. .NET Framework 4.8, injection, and an agent Skill remain deferred.
 
 Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only developer/test tooling**, not a remote administration service. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. Do not expose descriptors or bridge the protocol to untrusted clients.
 
@@ -25,6 +25,8 @@ dotnet run --project src\Scry.Cli -- capabilities --descriptor <path>
 dotnet run --project src\Scry.Cli -- roots --descriptor <path>
 dotnet run --project src\Scry.Cli -- evaluate --descriptor <path> --source expression.csx
 Get-Content statements.csx | dotnet run --project src\Scry.Cli -- execute --descriptor <path>
+dotnet run --project src\Scry.Cli -- jobs start --target scry-sample --json '{"operation":"invoke","payload":{"registeredOperation":"delay","arguments":{"milliseconds":1000}}}'
+dotnet run --project src\Scry.Cli -- scenario --input scenario.json
 ```
 
 See [`docs/development.md`](docs/development.md) for protocol and extension guidance.

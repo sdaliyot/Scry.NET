@@ -14,7 +14,8 @@ public static class ProtocolConstants
         new[]
         {
             "capabilities", "roots", "inspect", "get", "set", "invoke", "enumerate", "release",
-            "evaluate", "execute", "load-assembly", "list-assemblies", "find-types", "describe-type"
+            "evaluate", "execute", "load-assembly", "list-assemblies", "find-types", "describe-type",
+            "job.start", "job.status", "job.wait", "job.cancel", "job.logs"
         });
 
     public static IReadOnlyList<string> FeatureCapabilities { get; } = Array.AsReadOnly(
@@ -37,7 +38,10 @@ public sealed record ProtocolRequest(
     int ProtocolVersion,
     string RequestId,
     string Operation,
-    JsonElement Payload);
+    JsonElement Payload)
+{
+    public string? CorrelationId { get; init; }
+}
 
 public sealed record ProtocolResponse(
     int ProtocolVersion,
@@ -47,12 +51,40 @@ public sealed record ProtocolResponse(
     JsonElement? Result,
     ProtocolError? Error)
 {
+    public string? OperationId { get; init; }
+
+    public string? CorrelationId { get; init; }
+
     public static ProtocolResponse Succeeded(string requestId, string? sessionId, object? result) =>
+        Succeeded(requestId, sessionId, result, null, null);
+
+    public static ProtocolResponse Succeeded(
+        string requestId,
+        string? sessionId,
+        object? result,
+        string? operationId,
+        string? correlationId) =>
         new(ProtocolConstants.Version, requestId, true, sessionId,
-            JsonSerializer.SerializeToElement(result, ScryJson.Options), null);
+            JsonSerializer.SerializeToElement(result, ScryJson.Options), null)
+        {
+            OperationId = operationId,
+            CorrelationId = correlationId
+        };
 
     public static ProtocolResponse Failed(string requestId, string? sessionId, ProtocolError error) =>
-        new(ProtocolConstants.Version, requestId, false, sessionId, null, error);
+        Failed(requestId, sessionId, error, null, null);
+
+    public static ProtocolResponse Failed(
+        string requestId,
+        string? sessionId,
+        ProtocolError error,
+        string? operationId,
+        string? correlationId) =>
+        new(ProtocolConstants.Version, requestId, false, sessionId, null, error)
+        {
+            OperationId = operationId,
+            CorrelationId = correlationId
+        };
 }
 
 public sealed record ProtocolError(
@@ -106,7 +138,10 @@ public sealed record TargetMetadata(
     string RuntimeVersion,
     string FrameworkDescription,
     string Architecture,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt)
+{
+    public IReadOnlyList<string>? Aliases { get; init; }
+}
 
 public sealed record ConnectionDescriptor(
     int ProtocolVersion,
