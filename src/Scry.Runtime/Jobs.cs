@@ -308,7 +308,20 @@ internal sealed class JobManager : IDisposable
 
             foreach (var entry in _jobs.Values)
             {
-                entry.Dispose();
+                if (entry.IsCompleted)
+                {
+                    // The job finished within the shutdown grace period; safe to dispose now.
+                    entry.Dispose();
+                }
+                else
+                {
+                    // The job did not observe cancellation within the grace period and its
+                    // background task may still be executing. Disposing its CancellationTokenSource
+                    // or session lease now could throw ObjectDisposedException from the still-running
+                    // operation, or release the session lease while the operation is still using that
+                    // session. Defer disposal until the job's own execution actually completes.
+                    entry.DisposeWhenCompleted();
+                }
             }
 
             _jobs.Clear();
@@ -547,5 +560,22 @@ internal sealed class JobEntry : IDisposable
 
         _sessionLease.Dispose();
         _cancellation.Dispose();
+    }
+
+    /// <summary>
+    /// Defers disposal until the job's background task actually finishes. Used when a manager
+    /// shutdown's bounded wait elapses before this job observes cancellation: forcing disposal
+    /// while the task is still running could dispose the <see cref="CancellationTokenSource"/> or
+    /// session lease out from under it, producing an <see cref="ObjectDisposedException"/> or
+    /// releasing the session while it is still in use.
+    /// </summary>
+    public void DisposeWhenCompleted()
+    {
+        _ = Completion.ContinueWith(
+            static (_, state) => ((JobEntry)state!).Dispose(),
+            this,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }

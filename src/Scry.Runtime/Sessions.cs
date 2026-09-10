@@ -109,7 +109,17 @@ internal sealed class SessionManager : IDisposable
         _cleanupTimer.Dispose();
         foreach (var session in _sessions.Values)
         {
-            session.Dispose();
+            if (!session.IsInUse)
+            {
+                session.Dispose();
+            }
+
+            // Sessions with an in-flight operation (e.g. a job whose background task outlived the
+            // shutdown grace period) are intentionally left undisposed here. Forcibly disposing a
+            // session while an operation is still reading/writing its handles would corrupt that
+            // operation's state instead of letting it observe cooperative cancellation. Such
+            // sessions become unreachable through this manager once cleared below and are
+            // collected once the in-flight operation finishes and releases its lease.
         }
 
         _sessions.Clear();

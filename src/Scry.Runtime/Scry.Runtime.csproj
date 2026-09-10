@@ -8,6 +8,10 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.14.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Scry.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.Runtime</PackageId>
