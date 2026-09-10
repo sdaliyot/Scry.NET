@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
+    <ProjectReference Include="..\Scry.Runtime\Scry.Runtime.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
+    <PackageId>Scry.Sdk</PackageId>
+    <Description>Embedded hosting and client SDK for Scry.NET.</Description>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
+    <PackageId>Scry.Runtime</PackageId>
+    <Description>In-process Scry.NET endpoint runtime.</Description>
+  </PropertyGroup>
+
+</Project>
