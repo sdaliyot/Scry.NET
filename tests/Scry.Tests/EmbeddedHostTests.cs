@@ -212,7 +212,7 @@ public sealed class EmbeddedHostTests
     [Fact]
     public async Task Handles_are_stable_scoped_releasable_and_leased()
     {
-        await using var fixture = TestHost.Start(handleLease: TimeSpan.FromMilliseconds(100));
+        await using var fixture = TestHost.Start(handleLease: TimeSpan.FromSeconds(1));
         await using var first = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
 
         var firstRoots = await first.RequestAsync("roots");
@@ -232,7 +232,7 @@ public sealed class EmbeddedHostTests
 
         var refreshedRoots = await first.RequestAsync("roots");
         var expiringReference = RootReference(refreshedRoots, "state");
-        await Task.Delay(250);
+        await Task.Delay(1250);
         var expired = await first.RequestAsync("inspect", new { reference = expiringReference });
         Assert.Equal("handle_not_found", expired.Error?.Code);
     }

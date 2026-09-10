@@ -7,9 +7,13 @@
 | `Scry.Contracts` | Wire contracts, framing, target descriptors, discovery |
 | `Scry.Runtime` | Named-pipe server, sessions, handles, reflection, Roslyn execution, assembly catalog |
 | `Scry.Sdk` | Embedded `AgentHost`, registration builder, protocol client |
+| `Scry.Wpf` | Optional dispatcher-safe WPF projections, waits/assertions, screenshots |
+| `Scry.WinForms` | Optional control-owner-marshalled WinForms projections, waits/assertions, screenshots |
 | `Scry.Cli` | Stateless `scry` JSON command line |
 | `Scry.SampleHost` | Non-UI embedded example |
 | `Scry.Tests` | Protocol, runtime, and discovery tests |
+| `Scry.Wpf.Tests` | STA dispatcher tests for the optional WPF adapter |
+| `Scry.WinForms.Tests` | STA message-loop tests for the optional WinForms adapter |
 
 Libraries use `ScryLibraryTargetFrameworks` from `Directory.Build.props`. It currently contains only `net9.0`, matching the installed reference packs. A later .NET Framework layer can change it to `net9.0;net48` after adding compatibility shims and the real net48 reference assemblies; no unsupported target is advertised today.
 
@@ -39,6 +43,28 @@ using var host = AgentHost.Start(
 ```
 
 `RegisterValue` retains a specific object, while `RegisterRoot` evaluates its factory for each request. Registered operations receive structured JSON rather than source text. Session and handle limits, lease durations, alias, and preview length are configurable.
+
+### Desktop adapter integration
+
+The desktop packages depend on `Scry.Sdk`, but the dependency never points in the opposite direction. A non-UI target can use the core endpoint without loading PresentationFramework, WindowsBase, or System.Windows.Forms. UI targets opt in during host construction:
+
+```csharp
+builder.UseWpf(
+    Application.Current,
+    adapter => adapter.RegisterWindow("main", Application.Current.MainWindow));
+
+builder.UseWinForms(
+    mainForm,
+    adapter => adapter.RegisterRoot("main", mainForm));
+```
+
+`UseWpf` registers a `wpf` service root plus `wpf.snapshot`, `wpf.wait`, `wpf.assert`, and `wpf.screenshot`. Calls marshal through the selected `Dispatcher`. Snapshot payloads accept `tree` (`visual` or `logical`) and optional `root`; waits/assertions add `path`, `name`, `automationId`, `state`, `expected`, and optional timeout/poll intervals.
+
+`UseWinForms` registers a `winforms` service root plus `winforms.snapshot`, `winforms.wait`, `winforms.assert`, and `winforms.screenshot`. Calls marshal through the selected owner control with `BeginInvoke`; construct the adapter after that control has created its handle. Snapshot payloads accept an optional `root`; waits/assertions add `path`, `name`, `state`, `expected`, and optional timeout/poll intervals.
+
+Both adapters also expose typed `WpfAdapter`/`WinFormsAdapter` services and condition/result models for reusable in-process test code. Maximum depth/node counts, wait defaults, and screenshot dimensions and encoded byte sizes are configurable. A negative assertion is inconclusive when its bounded projection is truncated.
+
+WPF visual and logical snapshots are intentionally distinct: the visual view can omit logical-only values and unopened template or popup content, while the logical view can omit template-generated visuals. WinForms projects managed `Control` children, `Application.OpenForms`, owned-form metadata, `ToolStrip`/menu items, and bindings. Owner-drawn pixels, WebView2, ActiveX, `HwndHost`, native-child HWND internals, separate popup windows, protected content, and out-of-process surfaces can be absent. Screenshots use `RenderTargetBitmap` or `Control.DrawToBitmap` and return or throw explicit unsupported/failure results rather than claiming those surfaces were captured.
 
 ## Operations
 
@@ -104,7 +130,7 @@ Loading is explicit: evaluation never loads assemblies by path or probes arbitra
 ## Extensibility boundaries
 
 - Add protocol operations and capability names without changing framing.
-- Add runtime adapters (WPF/WinForms) as registered roots/operations rather than coupling UI assemblies into the core.
+- Keep runtime adapters (WPF/WinForms) as registered roots/operations rather than coupling UI assemblies into the core.
 - Add background jobs as a separate capability with dedicated lifecycle controls; execution in this layer remains request-scoped.
 - Keep attach/injection responsible only for loading and bootstrapping the same runtime endpoint.
 - A future Skill should drive the stable CLI JSON surface rather than acquire in-process state.
