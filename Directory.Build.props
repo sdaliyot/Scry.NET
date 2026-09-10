@@ -5,6 +5,33 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <ScryLibraryTargetFrameworks>net9.0</ScryLibraryTargetFrameworks>
+    <ScryModernTargetFramework>net9.0</ScryModernTargetFramework>
+    <ScryNetFrameworkTarget>net48</ScryNetFrameworkTarget>
+    <ScryLibraryTargetFrameworks>$(ScryModernTargetFramework);$(ScryNetFrameworkTarget)</ScryLibraryTargetFrameworks>
+    <SystemTextJsonVersion>9.0.11</SystemTextJsonVersion>
+    <BclAsyncInterfacesVersion>9.0.11</BclAsyncInterfacesVersion>
+    <TasksExtensionsVersion>4.5.4</TasksExtensionsVersion>
+    <NetFrameworkReferenceAssembliesVersion>1.0.3</NetFrameworkReferenceAssembliesVersion>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <Compile Include="$(MSBuildThisFileDirectory)src\Shared\NetFrameworkCompatibility.cs"
+             Link="Compatibility\NetFrameworkCompatibility.cs" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48"
+                      Version="$(NetFrameworkReferenceAssembliesVersion)"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)README.md"
+          Pack="true"
+          PackagePath="\"
+          Visible="false" />
+  </ItemGroup>
 </Project>

@@ -11,4 +11,9 @@
     <Description>Embedded hosting and client SDK for Scry.NET.</Description>
   </PropertyGroup>
 
+  <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="$(BclAsyncInterfacesVersion)" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="$(TasksExtensionsVersion)" />
+  </ItemGroup>
+
 </Project>

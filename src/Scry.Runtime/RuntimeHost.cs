@@ -3,7 +3,9 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Scry.Contracts;
@@ -25,8 +27,16 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
     private RuntimeHost(AgentConfiguration configuration, RuntimeHostOptions options)
     {
-        ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(options);
+        if (configuration is null)
+        {
+            throw new ArgumentNullException(nameof(configuration));
+        }
+
+        if (options is null)
+        {
+            throw new ArgumentNullException(nameof(options));
+        }
+
         if (string.IsNullOrWhiteSpace(options.Alias))
         {
             throw new ArgumentException("The target alias cannot be empty.", nameof(options));
@@ -61,11 +71,11 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         var process = Process.GetCurrentProcess();
         var targetId = Guid.NewGuid().ToString("N");
         var pipeName = $"scry-{Guid.NewGuid():N}";
-        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        var token = Convert.ToBase64String(RuntimeCompatibility.GetRandomBytes(32));
         Metadata = new(
             targetId,
             options.Alias,
-            Environment.ProcessId,
+            process.Id,
             process.ProcessName,
             Environment.Version.ToString(),
             RuntimeInformation.FrameworkDescription,
@@ -131,7 +141,11 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         }
 
         AppDomain.CurrentDomain.ProcessExit -= _processExitHandler;
+#if NET48
+        _stopping.Cancel();
+#else
         await _stopping.CancelAsync().ConfigureAwait(false);
+#endif
         foreach (var connection in _connections.Values)
         {
             connection.Dispose();
@@ -147,9 +161,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
         try
         {
-            await Task.WhenAll(_handlers.Values)
-                .WaitAsync(TimeSpan.FromSeconds(5))
-                .ConfigureAwait(false);
+            await RuntimeCompatibility.AwaitWithTimeoutAsync(
+                Task.WhenAll(_handlers.Values),
+                TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         }
         catch (Exception exception) when (
             exception is IOException or OperationCanceledException or ObjectDisposedException or
@@ -170,12 +184,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             NamedPipeServerStream? pipe = null;
             try
             {
-                pipe = new NamedPipeServerStream(
-                    Descriptor.PipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                pipe = CreatePipe();
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 var id = Interlocked.Increment(ref _connectionId);
                 _connections[id] = pipe;
@@ -435,8 +444,45 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
     {
         var expected = Encoding.UTF8.GetBytes(Descriptor.CapabilityToken);
         var supplied = Encoding.UTF8.GetBytes(candidate);
-        return expected.Length == supplied.Length &&
-            CryptographicOperations.FixedTimeEquals(expected, supplied);
+        var difference = expected.Length ^ supplied.Length;
+        for (var index = 0; index < expected.Length; index++)
+        {
+            difference |= expected[index] ^ (index < supplied.Length ? supplied[index] : 0);
+        }
+
+        return difference == 0;
+    }
+
+    private NamedPipeServerStream CreatePipe()
+    {
+#if NET48
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User
+            ?? throw new InvalidOperationException("The current Windows identity has no security identifier.");
+        var security = new PipeSecurity();
+        security.SetOwner(user);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new PipeAccessRule(
+            user,
+            PipeAccessRights.FullControl,
+            AccessControlType.Allow));
+        return new NamedPipeServerStream(
+            Descriptor.PipeName,
+            PipeDirection.InOut,
+            NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            0,
+            0,
+            security);
+#else
+        return new NamedPipeServerStream(
+            Descriptor.PipeName,
+            PipeDirection.InOut,
+            NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+#endif
     }
 
     private void PublishDescriptor()

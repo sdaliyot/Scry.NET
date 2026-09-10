@@ -6,9 +6,7 @@ namespace Scry.Sdk;
 
 public sealed class AgentHostOptions
 {
-    public string Alias { get; init; } = Environment.ProcessPath is { } path
-        ? Path.GetFileNameWithoutExtension(path)
-        : "managed-process";
+    public string Alias { get; init; } = DefaultAlias();
 
     public TimeSpan HandleLease { get; init; } = TimeSpan.FromMinutes(5);
 
@@ -49,6 +47,17 @@ public sealed class AgentHostOptions
     public int MaximumJobLogEntries { get; init; } = 1000;
 
     public int MaximumJobLogMessageLength { get; init; } = 4096;
+
+    private static string DefaultAlias()
+    {
+#if NET48
+        return Path.GetFileNameWithoutExtension(AppDomain.CurrentDomain.FriendlyName);
+#else
+        return Environment.ProcessPath is { } path
+            ? Path.GetFileNameWithoutExtension(path)
+            : "managed-process";
+#endif
+    }
 }
 
 public sealed class AgentBuilder
@@ -78,10 +87,14 @@ public sealed class AgentBuilder
         Func<JsonElement, object?> handler,
         string? description = null)
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+        {
+            throw new ArgumentNullException(nameof(handler));
+        }
+
         return RegisterOperation(
             name,
-            (arguments, _) => ValueTask.FromResult(handler(arguments)),
+            (arguments, _) => new ValueTask<object?>(handler(arguments)),
             description);
     }
 

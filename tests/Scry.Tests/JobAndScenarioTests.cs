@@ -133,6 +133,7 @@ public sealed class JobAndScenarioTests
             wait.Result!.Value.GetProperty("job").GetProperty("state").GetString());
     }
 
+#if NET9_0_OR_GREATER
     [Fact]
     public async Task Cli_orchestrates_two_sample_processes_and_preserves_partial_failures()
     {
@@ -257,6 +258,7 @@ public sealed class JobAndScenarioTests
         Assert.False(waitResult.TimedOut);
         Assert.Equal(JobStates.Succeeded, waitResult.Job.State);
     }
+#endif
 
     private static string FindRepositoryRoot()
     {

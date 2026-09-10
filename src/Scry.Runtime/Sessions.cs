@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
 using Scry.Contracts;
 
 namespace Scry.Runtime;
@@ -53,7 +51,7 @@ internal sealed class SessionManager : IDisposable
 
             while (true)
             {
-                var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+                var id = RuntimeCompatibility.CreateRandomHex(16);
                 var session = new SessionState(
                     _targetId,
                     id,
@@ -131,7 +129,7 @@ internal sealed class SessionState : IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, HandleEntry> _handles = new(StringComparer.Ordinal);
     private readonly Dictionary<object, string> _identities =
-        new(ReferenceEqualityComparer.Instance);
+        new(RuntimeCompatibility.ReferenceComparer);
     private readonly string _targetId;
     private readonly TimeSpan _handleLease;
     private readonly TimeSpan _sessionLease;
@@ -247,7 +245,7 @@ internal sealed class SessionState : IDisposable
                     $"The session's limit of {_maximumHandles} handles has been reached.");
             }
 
-            var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+            var id = RuntimeCompatibility.CreateRandomHex(16);
             var entry = new HandleEntry(value, DateTimeOffset.UtcNow.Add(_handleLease));
             _handles.Add(id, entry);
             _identities.Add(value, id);
@@ -286,11 +284,12 @@ internal sealed class SessionState : IDisposable
     {
         lock (_gate)
         {
-            if (!_handles.Remove(handleId, out var entry))
+            if (!_handles.TryGetValue(handleId, out var entry))
             {
                 return false;
             }
 
+            _handles.Remove(handleId);
             _identities.Remove(entry.Value);
             return true;
         }
@@ -315,7 +314,7 @@ internal sealed class SessionState : IDisposable
             : type.FullName ?? type.Name;
         return preview.Length <= _maximumPreviewLength
             ? preview
-            : preview[.._maximumPreviewLength];
+            : preview.Substring(0, _maximumPreviewLength);
     }
 
     public void Dispose()

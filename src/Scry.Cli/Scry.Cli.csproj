@@ -7,7 +7,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>$(ScryModernTargetFramework)</TargetFramework>
     <AssemblyName>scry</AssemblyName>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>scry</ToolCommandName>

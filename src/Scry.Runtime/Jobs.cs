@@ -47,7 +47,11 @@ internal sealed class JobManager : IDisposable
         string correlationId,
         CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(JobManager));
+        }
+
         return operation switch
         {
             "job.start" => Start(Parse<JobStartRequest>(payload), session, correlationId),

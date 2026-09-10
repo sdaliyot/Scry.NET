@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using Scry.Contracts;
@@ -79,7 +78,7 @@ internal sealed class OperationDispatcher(
             .Where(property =>
                 IsAccessorVisible(property.GetMethod, includeNonPublic) ||
                 IsAccessorVisible(property.SetMethod, includeNonPublic))
-            .DistinctBy(property => property.Name, StringComparer.Ordinal)
+            .DistinctByCompatible(property => property.Name, StringComparer.Ordinal)
             .Select(property => new MemberDescription(
                 property.Name,
                 "property",
@@ -90,7 +89,7 @@ internal sealed class OperationDispatcher(
             .Cast<MemberDescription>();
         var fields = TypeHierarchy(type)
             .SelectMany(level => level.GetFields(DeclaredFlags(includeNonPublic)))
-            .DistinctBy(field => field.Name, StringComparer.Ordinal)
+            .DistinctByCompatible(field => field.Name, StringComparer.Ordinal)
             .Select(field => new MemberDescription(
                 field.Name,
                 "field",
@@ -102,7 +101,7 @@ internal sealed class OperationDispatcher(
         var methods = TypeHierarchy(type)
             .SelectMany(level => level.GetMethods(DeclaredFlags(includeNonPublic)))
             .Where(method => !method.IsSpecialName)
-            .DistinctBy(
+            .DistinctByCompatible(
                 method => $"{method.Name}({string.Join(",", method.GetParameters().Select(parameter => parameter.ParameterType.FullName))})",
                 StringComparer.Ordinal)
             .Select(method => new MemberDescription(
@@ -135,7 +134,7 @@ internal sealed class OperationDispatcher(
         {
             PropertyInfo property => property.GetValue(subject),
             FieldInfo field => field.GetValue(subject),
-            _ => throw new UnreachableException()
+            _ => throw new InvalidOperationException("Unsupported readable member.")
         };
         return new
         {
@@ -164,7 +163,7 @@ internal sealed class OperationDispatcher(
                 field.SetValue(subject, converted);
                 break;
             default:
-                throw new UnreachableException();
+                throw new InvalidOperationException("Unsupported writable member.");
         }
 
         return new
@@ -221,13 +220,13 @@ internal sealed class OperationDispatcher(
         var name = RequiredString(payload, "member");
         var argumentElements = payload.TryGetProperty("arguments", out var array)
             ? array.EnumerateArray().ToArray()
-            : [];
+            : Array.Empty<JsonElement>();
         var includeNonPublic = GetOptionalBoolean(payload, "includeNonPublic");
         var candidates = TypeHierarchy(subject.GetType())
             .SelectMany(level => level.GetMethods(DeclaredFlags(includeNonPublic)))
             .Where(method => method.Name == name && !method.ContainsGenericParameters)
             .Where(method => method.GetParameters().Length == argumentElements.Length)
-            .DistinctBy(
+            .DistinctByCompatible(
                 method => $"{method.Name}({string.Join(",", method.GetParameters().Select(parameter => parameter.ParameterType.FullName))})",
                 StringComparer.Ordinal)
             .ToArray();
@@ -263,7 +262,7 @@ internal sealed class OperationDispatcher(
         var result = selected.Method.Invoke(subject, selected.Arguments);
         if (result is Task task)
         {
-            await task.ConfigureAwait(false);
+            await RuntimeCompatibility.AwaitWithCancellationAsync(task, cancellationToken).ConfigureAwait(false);
             result = task.GetType().IsGenericType
                 ? task.GetType().GetProperty("Result")!.GetValue(task)
                 : null;
@@ -278,7 +277,8 @@ internal sealed class OperationDispatcher(
             result.GetType().GetGenericTypeDefinition() == typeof(ValueTask<>))
         {
             var valueTaskAsTask = (Task)result.GetType().GetMethod("AsTask")!.Invoke(result, null)!;
-            await valueTaskAsTask.ConfigureAwait(false);
+            await RuntimeCompatibility.AwaitWithCancellationAsync(valueTaskAsTask, cancellationToken)
+                .ConfigureAwait(false);
             result = valueTaskAsTask.GetType().GetProperty("Result")!.GetValue(valueTaskAsTask);
         }
 
@@ -370,7 +370,7 @@ internal sealed class OperationDispatcher(
         var ids = payload.TryGetProperty("handleIds", out var handles)
             ? handles.EnumerateArray().Select(element =>
                 element.GetString() ?? throw new ScryOperationException("invalid_request", "handleIds must contain strings."))
-            : [RequiredString(payload, "handleId")];
+            : new[] { RequiredString(payload, "handleId") };
         var released = ids.Count(session.Release);
         return new { released };
     }
@@ -632,7 +632,7 @@ internal sealed class OperationDispatcher(
             exception is JsonException or NotSupportedException or InvalidCastException ||
             exception is ScryOperationException { Code: "argument_type_mismatch" })
         {
-            converted = [];
+            converted = Array.Empty<object?>();
             return false;
         }
     }
@@ -672,4 +672,22 @@ internal sealed class OperationDispatcher(
     private static T Deserialize<T>(JsonElement payload) =>
         payload.Deserialize<T>(ScryJson.Options)
         ?? throw new ScryOperationException("invalid_request", $"Request payload must be a {typeof(T).Name} object.");
+}
+
+internal static class LinqCompatibility
+{
+    internal static IEnumerable<TSource> DistinctByCompatible<TSource, TKey>(
+        this IEnumerable<TSource> source,
+        Func<TSource, TKey> keySelector,
+        IEqualityComparer<TKey> comparer)
+    {
+        var keys = new HashSet<TKey>(comparer);
+        foreach (var item in source)
+        {
+            if (keys.Add(keySelector(item)))
+            {
+                yield return item;
+            }
+        }
+    }
 }

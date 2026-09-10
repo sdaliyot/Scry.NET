@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Scry.Sdk;
 
 var alias = args
@@ -28,7 +29,7 @@ await using var host = AgentHost.Start(
                 context.Log("Delay requested.");
                 await Task.Delay(arguments.GetProperty("milliseconds").GetInt32(), context.CancellationToken);
                 context.Log("Delay completed.");
-                return $"{startedAt}:{DateTimeOffset.UtcNow.UtcTicks}:{Environment.ProcessId}";
+                return $"{startedAt}:{DateTimeOffset.UtcNow.UtcTicks}:{Process.GetCurrentProcess().Id}";
             },
             "Waits cooperatively and returns the process identity."),
     new AgentHostOptions { Alias = alias, Aliases = ["scry-sample"] });
@@ -43,11 +44,11 @@ if (waitForStdin)
 }
 else
 {
-    var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var stopping = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
     Console.CancelKeyPress += (_, eventArgs) =>
     {
         eventArgs.Cancel = true;
-        stopping.TrySetResult();
+        stopping.TrySetResult(null);
     };
     await stopping.Task.ConfigureAwait(false);
 }
@@ -58,7 +59,7 @@ internal sealed class SampleState
 
     public string Name { get; set; } = "sample";
 
-    public List<int> Numbers { get; } = [1, 2, 3, 4, 5];
+    public List<int> Numbers { get; } = new() { 1, 2, 3, 4, 5 };
 
     private string Secret { get; set; } = "visible only when explicitly requested";
 

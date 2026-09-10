@@ -34,17 +34,25 @@ public sealed class ScryClient : IAsyncDisposable
         bool ephemeralSession = false,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(descriptor);
+        if (descriptor is null)
+        {
+            throw new ArgumentNullException(nameof(descriptor));
+        }
+
         var pipe = new NamedPipeClientStream(
             ".",
             descriptor.PipeName,
             PipeDirection.InOut,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            PipeOptions.Asynchronous);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout ?? TimeSpan.FromSeconds(10));
         try
         {
+#if NET48
+            await pipe.ConnectAsync(Timeout.Infinite, timeoutSource.Token).ConfigureAwait(false);
+#else
             await pipe.ConnectAsync(timeoutSource.Token).ConfigureAwait(false);
+#endif
             var request = new ProtocolRequest(
                 ProtocolConstants.Version,
                 Guid.NewGuid().ToString("N"),
@@ -71,7 +79,7 @@ public sealed class ScryClient : IAsyncDisposable
         }
         catch
         {
-            await pipe.DisposeAsync().ConfigureAwait(false);
+            await DisposePipeAsync(pipe).ConfigureAwait(false);
             throw;
         }
     }
@@ -114,12 +122,12 @@ public sealed class ScryClient : IAsyncDisposable
         CancellationToken cancellationToken,
         string? correlationId)
     {
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        ThrowIfDisposed();
         await _requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var ioStarted = false;
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            ThrowIfDisposed();
             var request = new ProtocolRequest(
                 ProtocolConstants.Version,
                 Guid.NewGuid().ToString("N"),
@@ -145,7 +153,7 @@ public sealed class ScryClient : IAsyncDisposable
         {
             if (ioStarted && Interlocked.Exchange(ref _disposed, 1) == 0)
             {
-                await _pipe.DisposeAsync().ConfigureAwait(false);
+                await DisposePipeAsync(_pipe).ConfigureAwait(false);
             }
 
             throw;
@@ -228,12 +236,32 @@ public sealed class ScryClient : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RequestAsync("job.logs", new JobLogsRequest(job, cursor, limit), cancellationToken);
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            await _pipe.DisposeAsync().ConfigureAwait(false);
+            return DisposePipeAsync(_pipe);
         }
+
+        return default;
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed != 0)
+        {
+            throw new ObjectDisposedException(nameof(ScryClient));
+        }
+    }
+
+    private static ValueTask DisposePipeAsync(NamedPipeClientStream pipe)
+    {
+#if NET48
+        pipe.Dispose();
+        return default;
+#else
+        return pipe.DisposeAsync();
+#endif
     }
 
     private async Task<T> RequestResultAsync<T>(

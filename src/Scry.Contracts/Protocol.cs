@@ -104,7 +104,11 @@ public sealed record ExceptionDetail(
 {
     public static ExceptionDetail FromException(Exception exception)
     {
-        ArgumentNullException.ThrowIfNull(exception);
+        if (exception is null)
+        {
+            throw new ArgumentNullException(nameof(exception));
+        }
+
         return new(
             exception.GetType().FullName ?? exception.GetType().Name,
             exception.Message,
@@ -197,8 +201,13 @@ public static class FrameCodec
 
         var header = new byte[sizeof(int)];
         BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
+#if NET48
+        await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
+#else
         await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
         await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+#endif
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -207,13 +216,21 @@ public static class FrameCodec
         CancellationToken cancellationToken = default)
     {
         var header = new byte[sizeof(int)];
+#if NET48
+        var first = await stream.ReadAsync(header, 0, 1, cancellationToken).ConfigureAwait(false);
+#else
         var first = await stream.ReadAsync(header.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
+#endif
         if (first == 0)
         {
             return default;
         }
 
+#if NET48
+        await ReadExactlyAsync(stream, header, 1, header.Length - 1, cancellationToken).ConfigureAwait(false);
+#else
         await ReadExactlyAsync(stream, header.AsMemory(1), cancellationToken).ConfigureAwait(false);
+#endif
         var length = BinaryPrimitives.ReadInt32LittleEndian(header);
         if (length <= 0 || length > ProtocolConstants.MaximumFrameBytes)
         {
@@ -221,11 +238,40 @@ public static class FrameCodec
         }
 
         var payload = new byte[length];
+#if NET48
+        await ReadExactlyAsync(stream, payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
+#else
         await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false);
+#endif
         return JsonSerializer.Deserialize<T>(payload, ScryJson.Options)
             ?? throw new ProtocolException($"Frame did not contain a {typeof(T).Name}.");
     }
 
+#if NET48
+    private static async ValueTask ReadExactlyAsync(
+        Stream stream,
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var read = 0;
+        while (read < count)
+        {
+            var bytesRead = await stream.ReadAsync(
+                buffer,
+                offset + read,
+                count - read,
+                cancellationToken).ConfigureAwait(false);
+            if (bytesRead == 0)
+            {
+                throw new EndOfStreamException("The stream ended inside a protocol frame.");
+            }
+
+            read += bytesRead;
+        }
+    }
+#else
     private static async ValueTask ReadExactlyAsync(
         Stream stream,
         Memory<byte> buffer,
@@ -243,4 +289,5 @@ public static class FrameCodec
             read += count;
         }
     }
+#endif
 }

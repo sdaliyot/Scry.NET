@@ -40,7 +40,11 @@ public sealed class ScryExecutionContext
 
     public object Resolve(ExternalReference reference)
     {
-        ArgumentNullException.ThrowIfNull(reference);
+        if (reference is null)
+        {
+            throw new ArgumentNullException(nameof(reference));
+        }
+
         return _resolver(reference);
     }
 
@@ -61,7 +65,7 @@ public sealed class ExecutionGlobals
 internal sealed class ExecutionEngine
 {
     private static readonly string[] DefaultImports =
-    [
+    {
         "System",
         "System.Collections.Generic",
         "System.Linq",
@@ -69,7 +73,7 @@ internal sealed class ExecutionEngine
         "System.Threading.Tasks",
         "Scry.Contracts",
         "Scry.Runtime"
-    ];
+    };
 
     private readonly AgentConfiguration _configuration;
     private readonly RuntimeHostOptions _options;
@@ -130,7 +134,8 @@ internal sealed class ExecutionEngine
             .WithReferences(_assemblies.GetMetadataReferences(
                 request.References,
                 _options.MaximumExecutionReferences))
-            .WithImports(DefaultImports.Concat(request.Imports ?? []).Distinct(StringComparer.Ordinal));
+            .WithImports(DefaultImports.Concat(request.Imports ?? Array.Empty<string>())
+                .Distinct(StringComparer.Ordinal));
         var source = isStatementBody ? WrapStatementBody(request.Source) : request.Source;
         var script = CSharpScript.Create<object?>(
             source,
@@ -278,7 +283,7 @@ internal sealed class ExecutionLogBuffer
     private readonly object _gate = new();
     private readonly int _maximumEntries;
     private readonly int _maximumMessageLength;
-    private readonly List<ExecutionLogEntry> _entries = [];
+    private readonly List<ExecutionLogEntry> _entries = new();
     private int _droppedCount;
 
     public ExecutionLogBuffer(int maximumEntries, int maximumMessageLength)
@@ -324,10 +329,10 @@ internal sealed class ExecutionLogBuffer
                 return;
             }
 
-            var boundedLevel = level.Length <= 64 ? level : level[..64];
+            var boundedLevel = level.Length <= 64 ? level : level.Substring(0, 64);
             var bounded = message.Length <= _maximumMessageLength
                 ? message
-                : message[.._maximumMessageLength];
+                : message.Substring(0, _maximumMessageLength);
             _entries.Add(new(DateTimeOffset.UtcNow, boundedLevel, bounded));
         }
     }

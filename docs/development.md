@@ -15,13 +15,24 @@
 | `Scry.Wpf.Tests` | STA dispatcher tests for the optional WPF adapter |
 | `Scry.WinForms.Tests` | STA message-loop tests for the optional WinForms adapter |
 
-Libraries use `ScryLibraryTargetFrameworks` from `Directory.Build.props`. It currently contains only `net9.0`, matching the installed reference packs. A later .NET Framework layer can change it to `net9.0;net48` after adding compatibility shims and the real net48 reference assemblies; no unsupported target is advertised today.
+Target names and compatibility package versions are centralized in `Directory.Build.props`.
+
+| Project | Target frameworks | Notes |
+|---|---|---|
+| `Scry.Contracts` | `net9.0`, `net48` | Identical protocol and descriptor shape |
+| `Scry.Runtime` | `net9.0`, `net48` | CoreCLR load contexts or desktop CLR default-AppDomain behavior |
+| `Scry.Sdk` | `net9.0`, `net48` | Embedded host and client |
+| `Scry.SampleHost` | `net9.0`, `net48` | Non-UI embedded sample |
+| `Scry.Tests` | `net9.0`, `net48` | Runtime integration suite; CLI tests run on `net9.0` |
+| `Scry.Cli` | `net9.0` | Modern-only executable that interoperates with both host targets |
+
+The `Microsoft.NETFramework.ReferenceAssemblies.net48` package makes SDK-style net48 builds independent of machine-installed targeting packs. Runtime validation still requires Windows with .NET Framework 4.8 installed.
 
 ## Protocol and security
 
 Frames are a 4-byte little-endian length followed by UTF-8 JSON. Protocol version 1 requires `handshake` first. The handshake authenticates a 256-bit random capability token, negotiates the version, creates or resumes a target-qualified session, and returns capabilities. Subsequent requests use structured success/error envelopes. Every handled request receives a target-generated `operationId`; a supplied `correlationId` is echoed, or defaults to that operation ID. Ordinary operation exceptions cross the boundary with type, message, stack, HResult, source, and recursively captured inner exceptions. Fatal runtime failures such as process termination, stack overflow, corrupted state, or fail-fast can bypass this boundary.
 
-Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. The named pipe uses `PipeOptions.CurrentUserOnly`; descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
+Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. On .NET 9 the named pipe uses `PipeOptions.CurrentUserOnly`. On .NET Framework 4.8 the server creates a protected, non-inheriting DACL with an allow rule only for the current Windows user SID; it does not fall back to a broadly accessible pipe. Descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
 
 Sessions belong to one target. Object references contain target, session, and handle IDs, preventing accidental cross-target/session use. Handles are strong references with sliding leases, stable identity within a session, explicit release, and cleanup on expiry/session disposal. Previews are bounded and are not object serialization.
 
@@ -121,7 +132,7 @@ Context.Log("message", "information")
 
 Registered root factories are evaluated once at the start of each execution. `Resolve` enforces the current target/session handle scope. Logs are bounded by entry count and message length and report dropped entries. Compilation failures use the normal failure envelope with code `compilation_failed` and structured diagnostics containing ID, severity, message, and one-based source spans. Exceptions thrown by compiled code use the ordinary recursive exception envelope.
 
-Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context. Dynamic, native, unreadable, and non-default-context modules are skipped. This restriction preserves runtime type identity: Roslyn cannot safely bind script code to an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
+Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context or default AppDomain. Dynamic, native, and unreadable modules are skipped. On .NET 9, non-default-context modules are also skipped because Roslyn cannot safely bind script code to an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
 
 Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code that never observes server cancellation cannot be forcibly stopped safely inside the target process and can continue blocking that connection. Scry does not claim process isolation or hard timeouts.
 
@@ -129,10 +140,10 @@ Host defaults are configurable through `AgentHostOptions`: source length, defaul
 
 ## Assembly loading and type discovery
 
-`load-assembly` requires an absolute path:
+`load-assembly` requires an absolute path. Loading differs by runtime:
 
-- `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. This gives normal target identity/unification behavior and is not unloadable.
-- `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains the context for the host lifetime; there is no unload operation in this layer. Its assemblies are available to list/find/describe operations but are intentionally excluded from Roslyn references because scripts cannot preserve their existing load-context type identity.
+- On .NET 9, `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains isolated contexts for the host lifetime; there is no unload operation in this release. Isolated assemblies are available to list/find/describe operations but are intentionally excluded from Roslyn references.
+- On .NET Framework 4.8, only `AppDomain.CurrentDomain` is supported. `default` uses `Assembly.LoadFrom` in that AppDomain, and descriptions report `DefaultAppDomain`. `isolated` fails with `load_policy_not_supported`: a child AppDomain cannot preserve Scry's in-process roots, handles, reflection objects, and Roslyn type identity.
 
 Loading is explicit: evaluation never loads assemblies by path or probes arbitrary directories. `list-assemblies` reports identity, location, dynamic status, load context, default-context status, and collectibility. `find-types` performs bounded filtering over loaded types and reports each type's load context. `describe-type` returns bounded member metadata; `assembly` and `loadContext` selectors disambiguate duplicate full type names across assemblies or contexts.
 
@@ -180,11 +191,26 @@ scry jobs wait --target my-test-target --json `
 
 Scenario output is a `ScenarioResult` containing `protocolVersion`, normalized `mode`, aggregate `success`, and ordered `results`. Every item preserves its command ID, index, operation, selector, resolved target metadata when available, and either the target's `ProtocolResponse` or a CLI-side `ProtocolError`. A scenario exits `0` only when every command succeeds and `6` when any command fails; individual commands retain the existing exit codes.
 
+Generated Roslyn script assemblies and assemblies loaded into the .NET Framework default AppDomain cannot be unloaded independently. They remain until the host process exits. Scry does not create, marshal across, or unload child AppDomains in the net48 implementation.
+
+## Validation
+
+Run the modern and desktop CLR suites explicitly:
+
+```powershell
+dotnet build Scry.sln -c Release
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net9.0 --no-build
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net48 --artifacts-path artifacts\net48-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net48 --artifacts-path artifacts\net48-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet format Scry.sln --verify-no-changes --no-restore
+```
+
+The net48 suite executes an embedded endpoint on the installed desktop CLR and covers framing (including partial and truncated reads), discovery, current-user pipe ACLs, capability authentication, sessions and handles, reflection, exception projection, limits, Roslyn evaluate/execute, assembly discovery/loading, and the unsupported isolated-policy response. The architecture-specific runs assert that the test host is actually x64 or x86.
+
 ## Extensibility boundaries
 
-- Add protocol operations and capability names without changing framing.
-- Keep runtime adapters (WPF/WinForms) as registered roots/operations rather than coupling UI assemblies into the core.
+- Add protocol operations and capability names without changing framing or cross-runtime JSON shapes.
+- Add runtime adapters (WPF/WinForms) as registered roots/operations rather than coupling UI assemblies into the core.
 - Add Roslyn execution as an opt-in capability without coupling compiler services into the job/runtime layer.
-- Add background jobs as a separate capability with dedicated lifecycle controls; execution in this layer remains request-scoped.
 - Keep attach/injection responsible only for loading and bootstrapping the same runtime endpoint.
 - A future Skill should drive the stable CLI JSON surface rather than acquire in-process state.

@@ -41,12 +41,72 @@ public sealed class EmbeddedHostTests
             item => item.Descriptor.Target.TargetId == targetId);
     }
 
+#if NET48
+    [Fact]
+    public async Task Net48_embedded_host_runs_protocol_reflection_and_roslyn_in_the_default_appdomain()
+    {
+        await using var fixture = TestHost.Start();
+        Assert.Contains(".NET Framework", fixture.Host.Metadata.FrameworkDescription);
+        Assert.Equal(Environment.Is64BitProcess ? "x64" : "x86", fixture.Host.Metadata.Architecture);
+#if SCRY_EXPECT_X86
+        Assert.False(Environment.Is64BitProcess);
+#elif SCRY_EXPECT_X64
+        Assert.True(Environment.Is64BitProcess);
+#endif
+
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+        var roots = await client.RequestAsync("roots");
+        var state = RootReference(roots, "state");
+        var count = await client.RequestAsync("get", new { reference = state, member = "Count" });
+        Assert.Equal(7, ScalarFrom(count));
+
+        var evaluated = await client.EvaluateAsync(new ExecutionRequest(
+            "return ((Scry.Tests.EmbeddedHostTests.TestState)Context.GetRoot(\"state\")!).Count * 6;",
+            References: new[] { typeof(EmbeddedHostTests).Assembly.GetName().Name! }));
+        Assert.Equal(42, evaluated.Value.Value!.Value.GetInt32());
+
+        var isolated = await client.RequestAsync(
+            "load-assembly",
+            new LoadAssemblyRequest(typeof(ExternalReference).Assembly.Location, "isolated"));
+        Assert.Equal("load_policy_not_supported", isolated.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Net48_pipe_dacl_is_protected_and_grants_only_the_current_user()
+    {
+        await using var fixture = TestHost.Start();
+        var descriptor = await TargetDiscovery.ReadAsync(fixture.Host.DescriptorPath);
+        using var pipe = await ConnectPipeAsync(descriptor);
+        var security = pipe.GetAccessControl();
+        var currentUser = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+        var world = new System.Security.Principal.SecurityIdentifier(
+            System.Security.Principal.WellKnownSidType.WorldSid,
+            null);
+        var rules = security.GetAccessRules(
+                includeExplicit: true,
+                includeInherited: true,
+                typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.IO.Pipes.PipeAccessRule>()
+            .ToArray();
+
+        Assert.True(security.AreAccessRulesProtected);
+        Assert.Contains(
+            rules,
+            rule => rule.AccessControlType == System.Security.AccessControl.AccessControlType.Allow &&
+                Equals(rule.IdentityReference, currentUser));
+        Assert.DoesNotContain(
+            rules,
+            rule => rule.AccessControlType == System.Security.AccessControl.AccessControlType.Allow &&
+                Equals(rule.IdentityReference, world));
+    }
+#endif
+
     [Fact]
     public async Task Discovery_ignores_and_removes_malformed_descriptors()
     {
         Directory.CreateDirectory(TargetDiscovery.DirectoryPath);
         var path = TargetDiscovery.GetDescriptorPath($"malformed-{Guid.NewGuid():N}");
-        await File.WriteAllTextAsync(path, "{}");
+        File.WriteAllText(path, "{}");
         try
         {
             _ = await TargetDiscovery.FindAsync();
@@ -77,7 +137,7 @@ public sealed class EmbeddedHostTests
         await using var fixture = TestHost.Start();
         var descriptor = await TargetDiscovery.ReadAsync(fixture.Host.DescriptorPath);
 
-        await using (var pipe = await ConnectPipeAsync(descriptor))
+        using (var pipe = await ConnectPipeAsync(descriptor))
         {
             var request = new ProtocolRequest(
                 ProtocolConstants.Version,
@@ -91,7 +151,7 @@ public sealed class EmbeddedHostTests
             Assert.Equal("protocol_version_mismatch", response?.Error?.Code);
         }
 
-        await using (var pipe = await ConnectPipeAsync(descriptor))
+        using (var pipe = await ConnectPipeAsync(descriptor))
         {
             var request = new ProtocolRequest(
                 ProtocolConstants.Version,
@@ -554,7 +614,11 @@ public sealed class EmbeddedHostTests
             typeof(TestState).FullName!,
             typeof(EmbeddedHostTests).Assembly.GetName().Name));
         Assert.Equal(typeof(TestState).FullName, description.Type.FullName);
+#if NET48
+        Assert.Equal("DefaultAppDomain", description.Type.LoadContext);
+#else
         Assert.Equal("Default", description.Type.LoadContext);
+#endif
         Assert.Contains(description.Members, member => member.Name == nameof(TestState.Count));
 
         var defaultLoaded = await client.LoadAssemblyAsync(new(
@@ -563,6 +627,12 @@ public sealed class EmbeddedHostTests
         Assert.True(defaultLoaded.Assembly.IsDefaultLoadContext);
         Assert.False(defaultLoaded.Assembly.IsCollectible);
 
+#if NET48
+        var isolated = await client.RequestAsync(
+            "load-assembly",
+            new LoadAssemblyRequest(typeof(ExternalReference).Assembly.Location, "isolated"));
+        Assert.Equal("load_policy_not_supported", isolated.Error?.Code);
+#else
         var cliAssemblyPath = Directory.EnumerateFiles(
                 Path.Combine(FindRepositoryRoot(), "src", "Scry.Cli", "bin"),
                 "scry.dll",
@@ -580,6 +650,7 @@ public sealed class EmbeddedHostTests
                 "return 1;",
                 References: [loaded.Assembly.FullName]));
         Assert.Equal("assembly_not_compatible", incompatibleReference.Error?.Code);
+#endif
     }
 
     [Fact]
@@ -680,6 +751,7 @@ public sealed class EmbeddedHostTests
         Assert.True((await next.RequestAsync("capabilities")).Success);
     }
 
+#if NET9_0_OR_GREATER
     [Fact]
     public async Task Cli_connects_by_descriptor_without_exposing_the_token()
     {
@@ -761,6 +833,7 @@ public sealed class EmbeddedHostTests
             File.Delete(sourcePath);
         }
     }
+#endif
 
     private static ExternalReference ReferenceFrom(JsonElement remoteValue) =>
         remoteValue.GetProperty("reference").Deserialize<ExternalReference>(ScryJson.Options)
@@ -807,7 +880,7 @@ public sealed class EmbeddedHostTests
             ".",
             descriptor.PipeName,
             PipeDirection.InOut,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            PipeOptions.Asynchronous);
         await pipe.ConnectAsync(5000);
         return pipe;
     }

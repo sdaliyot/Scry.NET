@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using Scry.Contracts;
@@ -22,7 +21,11 @@ internal static class ValueProjection
 
     public static JsonElement Project(object value)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        if (value is null)
+        {
+            throw new ArgumentNullException(nameof(value));
+        }
+
         if (!value.GetType().IsValueType)
         {
             throw new ArgumentException("Only value types can be projected.", nameof(value));
@@ -101,7 +104,7 @@ internal static class ValueProjection
                 .Cast<MemberInfo>();
             return properties
                 .Concat(fields)
-                .DistinctBy(member => member.Name, StringComparer.Ordinal)
+                .DistinctByCompatible(member => member.Name, StringComparer.Ordinal)
                 .OrderBy(member => member.Name, StringComparer.Ordinal)
                 .ToArray();
         }
@@ -121,7 +124,7 @@ internal static class ValueProjection
                 {
                     PropertyInfo property => property.GetValue(value),
                     FieldInfo field => field.GetValue(value),
-                    _ => throw new UnreachableException()
+                    _ => throw new InvalidOperationException("Unsupported readable member.")
                 };
                 return Project(memberValue, depth);
             }

@@ -12,6 +12,11 @@
     <InternalsVisibleTo Include="Scry.Tests" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="$(BclAsyncInterfacesVersion)" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="$(TasksExtensionsVersion)" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.Runtime</PackageId>

@@ -19,7 +19,7 @@ public static class TargetDiscovery
         string path,
         CancellationToken cancellationToken = default)
     {
-        await using var stream = File.OpenRead(Path.GetFullPath(path));
+        using var stream = File.OpenRead(Path.GetFullPath(path));
         var descriptor = await JsonSerializer.DeserializeAsync<ConnectionDescriptor>(
             stream, ScryJson.Options, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException($"Descriptor '{path}' is empty or invalid.");
@@ -32,7 +32,7 @@ public static class TargetDiscovery
     {
         if (!Directory.Exists(DirectoryPath))
         {
-            return [];
+            return Array.Empty<(ConnectionDescriptor Descriptor, string Path)>();
         }
 
         var results = new List<(ConnectionDescriptor Descriptor, string Path)>();

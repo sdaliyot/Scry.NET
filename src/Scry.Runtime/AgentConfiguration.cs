@@ -4,9 +4,7 @@ namespace Scry.Runtime;
 
 public sealed class RuntimeHostOptions
 {
-    public string Alias { get; init; } = Environment.ProcessPath is { } path
-        ? Path.GetFileNameWithoutExtension(path)
-        : "managed-process";
+    public string Alias { get; init; } = DefaultAlias();
 
     public TimeSpan HandleLease { get; init; } = TimeSpan.FromMinutes(5);
 
@@ -47,6 +45,17 @@ public sealed class RuntimeHostOptions
     public int MaximumJobLogEntries { get; init; } = 1000;
 
     public int MaximumJobLogMessageLength { get; init; } = 4096;
+
+    private static string DefaultAlias()
+    {
+#if NET48
+        return Path.GetFileNameWithoutExtension(AppDomain.CurrentDomain.FriendlyName);
+#else
+        return Environment.ProcessPath is { } path
+            ? Path.GetFileNameWithoutExtension(path)
+            : "managed-process";
+#endif
+    }
 }
 
 public sealed class AgentConfiguration
@@ -62,11 +71,17 @@ public sealed class AgentConfiguration
     public void AddRoot(string name, Func<object?> valueFactory, string? description = null)
     {
         ValidateName(name);
-        ArgumentNullException.ThrowIfNull(valueFactory);
-        if (!_roots.TryAdd(name, new(name, valueFactory, description)))
+        if (valueFactory is null)
+        {
+            throw new ArgumentNullException(nameof(valueFactory));
+        }
+
+        if (_roots.ContainsKey(name))
         {
             throw new ArgumentException($"A root named '{name}' is already registered.", nameof(name));
         }
+
+        _roots.Add(name, new(name, valueFactory, description));
     }
 
     public void AddOperation(
@@ -75,12 +90,17 @@ public sealed class AgentConfiguration
         string? description = null)
     {
         ValidateName(name);
-        ArgumentNullException.ThrowIfNull(handler);
-        if (_contextualOperations.ContainsKey(name) ||
-            !_operations.TryAdd(name, new(name, handler, description)))
+        if (handler is null)
+        {
+            throw new ArgumentNullException(nameof(handler));
+        }
+
+        if (_contextualOperations.ContainsKey(name) || _operations.ContainsKey(name))
         {
             throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
         }
+
+        _operations.Add(name, new(name, handler, description));
     }
 
     public void AddContextualOperation(
@@ -89,12 +109,17 @@ public sealed class AgentConfiguration
         string? description = null)
     {
         ValidateName(name);
-        ArgumentNullException.ThrowIfNull(handler);
-        if (_operations.ContainsKey(name) ||
-            !_contextualOperations.TryAdd(name, new(name, handler, description)))
+        if (handler is null)
+        {
+            throw new ArgumentNullException(nameof(handler));
+        }
+
+        if (_operations.ContainsKey(name) || _contextualOperations.ContainsKey(name))
         {
             throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
         }
+
+        _contextualOperations.Add(name, new(name, handler, description));
     }
 
     internal IEnumerable<(string Name, string? Description)> DescribeOperations() =>
@@ -150,8 +175,16 @@ public sealed class OperationExecutionContext
 
     public void Log(string message, string level = "information")
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        ArgumentException.ThrowIfNullOrWhiteSpace(level);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", nameof(message));
+        }
+
+        if (string.IsNullOrWhiteSpace(level))
+        {
+            throw new ArgumentException("Value cannot be null or whitespace.", nameof(level));
+        }
+
         _log?.Invoke(level, message);
     }
 }

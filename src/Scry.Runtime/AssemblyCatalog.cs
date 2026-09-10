@@ -1,5 +1,7 @@
 using System.Reflection;
+#if !NET48
 using System.Runtime.Loader;
+#endif
 using Microsoft.CodeAnalysis;
 using Scry.Contracts;
 
@@ -8,7 +10,9 @@ namespace Scry.Runtime;
 internal sealed class AssemblyCatalog
 {
     private readonly object _gate = new();
+#if !NET48
     private readonly List<AssemblyLoadContext> _retainedContexts = [];
+#endif
     private readonly RuntimeHostOptions _options;
 
     public AssemblyCatalog(RuntimeHostOptions options)
@@ -24,7 +28,7 @@ internal sealed class AssemblyCatalog
         }
 
         var path = Path.GetFullPath(request.Path);
-        if (!Path.IsPathFullyQualified(request.Path))
+        if (!IsFullyQualifiedPath(request.Path))
         {
             throw new ScryOperationException(
                 "invalid_request",
@@ -95,7 +99,7 @@ internal sealed class AssemblyCatalog
             .Where(type => request.Namespace is null ||
                 string.Equals(type.Namespace, request.Namespace, StringComparison.Ordinal))
             .Where(type => string.IsNullOrWhiteSpace(request.Query) ||
-                (type.FullName ?? type.Name).Contains(request.Query, StringComparison.OrdinalIgnoreCase))
+                (type.FullName ?? type.Name).IndexOf(request.Query, StringComparison.OrdinalIgnoreCase) >= 0)
             .OrderBy(type => type.FullName ?? type.Name, StringComparer.Ordinal)
             .Take(request.Limit)
             .Select(Summarize)
@@ -152,7 +156,7 @@ internal sealed class AssemblyCatalog
         return new(
             Summarize(type),
             TypeName(type.BaseType),
-            type.GetInterfaces().Select(item => TypeName(item)!).Order(StringComparer.Ordinal).ToArray(),
+            type.GetInterfaces().Select(item => TypeName(item)!).OrderBy(item => item, StringComparer.Ordinal).ToArray(),
             type.GetGenericArguments().Select(item => TypeName(item)!).ToArray(),
             members);
     }
@@ -170,7 +174,7 @@ internal sealed class AssemblyCatalog
 
         var assemblies = LoadedAssemblies()
             .Where(assembly =>
-                AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default &&
+                IsExecutionCompatible(assembly) &&
                 !assembly.IsDynamic &&
                 TryGetLocation(assembly) is not null)
             .GroupBy(assembly => assembly.FullName, StringComparer.Ordinal)
@@ -236,13 +240,22 @@ internal sealed class AssemblyCatalog
     private Assembly LoadDefault(string path)
     {
         var existing = LoadedAssemblies().FirstOrDefault(assembly =>
-            AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default &&
+            IsDefaultContext(assembly) &&
             string.Equals(TryGetLocation(assembly), path, StringComparison.OrdinalIgnoreCase));
+#if NET48
+        return existing ?? Assembly.LoadFrom(path);
+#else
         return existing ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
+#endif
     }
 
     private Assembly LoadIsolated(string path)
     {
+#if NET48
+        throw new ScryOperationException(
+            "load_policy_not_supported",
+            "The isolated load policy is unavailable on .NET Framework 4.8; only the default AppDomain is supported.");
+#else
         lock (_gate)
         {
             var existing = _retainedContexts
@@ -259,6 +272,7 @@ internal sealed class AssemblyCatalog
             _retainedContexts.Add(context);
             return assembly;
         }
+#endif
     }
 
     private IEnumerable<Assembly> SelectAssemblies(string? selector, string? loadContext)
@@ -266,8 +280,9 @@ internal sealed class AssemblyCatalog
         var assemblies = LoadedAssemblies();
         if (!string.IsNullOrWhiteSpace(selector))
         {
+            var assemblySelector = selector!;
             assemblies = assemblies
-                .Where(assembly => AssemblyMatches(assembly, selector))
+                .Where(assembly => AssemblyMatches(assembly, assemblySelector))
                 .ToArray();
             if (assemblies.Length == 0)
             {
@@ -305,6 +320,18 @@ internal sealed class AssemblyCatalog
 
     private static AssemblyDescription Describe(Assembly assembly)
     {
+#if NET48
+        var name = assembly.GetName();
+        return new(
+            name.Name ?? assembly.FullName ?? "<unknown>",
+            assembly.FullName ?? name.FullName,
+            name.Version?.ToString(),
+            TryGetLocation(assembly),
+            assembly.IsDynamic,
+            "DefaultAppDomain",
+            true,
+            false);
+#else
         var context = AssemblyLoadContext.GetLoadContext(assembly);
         var name = assembly.GetName();
         return new(
@@ -316,6 +343,7 @@ internal sealed class AssemblyCatalog
             context?.Name ?? (context == AssemblyLoadContext.Default ? "Default" : "<unknown>"),
             context == AssemblyLoadContext.Default,
             context?.IsCollectible == true);
+#endif
     }
 
     private static TypeSummary Summarize(Type type) =>
@@ -388,7 +416,7 @@ internal sealed class AssemblyCatalog
         catch (Exception exception) when (
             exception is NotSupportedException or FileNotFoundException or FileLoadException)
         {
-            return [];
+            return Array.Empty<Type>();
         }
     }
 
@@ -412,10 +440,15 @@ internal sealed class AssemblyCatalog
 
     private static string ContextName(Assembly assembly)
     {
+#if NET48
+        return "DefaultAppDomain";
+#else
         var context = AssemblyLoadContext.GetLoadContext(assembly);
         return context?.Name ?? (context == AssemblyLoadContext.Default ? "Default" : "<unknown>");
+#endif
     }
 
+#if !NET48
     private sealed class IsolatedAssemblyLoadContext : AssemblyLoadContext
     {
         private readonly AssemblyDependencyResolver _resolver;
@@ -438,4 +471,30 @@ internal sealed class AssemblyCatalog
             return path is null ? 0 : LoadUnmanagedDllFromPath(path);
         }
     }
+#endif
+
+    private static bool IsFullyQualifiedPath(string path)
+    {
+#if NET48
+        return path.StartsWith(@"\\", StringComparison.Ordinal) ||
+            (path.Length >= 3 &&
+             char.IsLetter(path[0]) &&
+             path[1] == ':' &&
+             (path[2] == Path.DirectorySeparatorChar || path[2] == Path.AltDirectorySeparatorChar));
+#else
+        return Path.IsPathFullyQualified(path);
+#endif
+    }
+
+    private static bool IsDefaultContext(Assembly assembly)
+    {
+#if NET48
+        _ = assembly;
+        return true;
+#else
+        return AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default;
+#endif
+    }
+
+    private static bool IsExecutionCompatible(Assembly assembly) => IsDefaultContext(assembly);
 }
