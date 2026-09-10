@@ -41,7 +41,7 @@ internal static class Cli
                 throw new CliUsageException($"Unknown or invalid command '{command}'.");
             }
 
-            var payload = await ReadPayloadAsync(options).ConfigureAwait(false);
+            var payload = await ReadPayloadAsync(command, options).ConfigureAwait(false);
             var descriptor = await ResolveDescriptorAsync(options).ConfigureAwait(false);
             options.TryGetValue("session", out var sessionId);
             await using var client = await ScryClient.ConnectAsync(
@@ -123,25 +123,35 @@ internal static class Cli
     }
 
     private static async Task<JsonElement> ReadPayloadAsync(
+        string command,
         IReadOnlyDictionary<string, string> options)
     {
-        string json;
-        if (options.TryGetValue("input", out var path))
+        var isExecution = command is "evaluate" or "execute";
+        if (options.TryGetValue("source", out var sourcePath))
         {
-            try
+            if (!isExecution)
             {
-                json = path == "-"
-                    ? await Console.In.ReadToEndAsync().ConfigureAwait(false)
-                    : await File.ReadAllTextAsync(path).ConfigureAwait(false);
+                throw new CliUsageException("--source is only valid for evaluate and execute.");
             }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException)
-            {
-                throw new CliUsageException($"Could not read request input '{path}': {exception.Message}");
-            }
+
+            var source = await ReadTextAsync(sourcePath, "source").ConfigureAwait(false);
+            return JsonSerializer.SerializeToElement(new { source }, ScryJson.Options);
+        }
+
+        string json;
+        if (options.TryGetValue("request", out var requestPath) ||
+            options.TryGetValue("input", out requestPath))
+        {
+            json = await ReadTextAsync(requestPath, "request").ConfigureAwait(false);
         }
         else if (options.TryGetValue("json", out var inline))
         {
+            if (isExecution)
+            {
+                throw new CliUsageException(
+                    "Use --source, --request, or redirected stdin for C# execution.");
+            }
+
             json = inline;
         }
         else if (Console.IsInputRedirected)
@@ -149,7 +159,14 @@ internal static class Cli
             json = await Console.In.ReadToEndAsync().ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(json))
             {
-                json = "{}";
+                json = isExecution
+                    ? throw new CliUsageException("Execution source from stdin cannot be empty.")
+                    : "{}";
+            }
+
+            if (isExecution)
+            {
+                return JsonSerializer.SerializeToElement(new { source = json }, ScryJson.Options);
             }
         }
         else
@@ -166,6 +183,21 @@ internal static class Cli
         return document.RootElement.Clone();
     }
 
+    private static async Task<string> ReadTextAsync(string path, string kind)
+    {
+        try
+        {
+            return path == "-"
+                ? await Console.In.ReadToEndAsync().ConfigureAwait(false)
+                : await File.ReadAllTextAsync(path).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CliUsageException($"Could not read {kind} input '{path}': {exception.Message}");
+        }
+    }
+
     private static Dictionary<string, string> ParseOptions(string[] args)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -178,7 +210,7 @@ internal static class Cli
             }
 
             var name = argument[2..];
-            if (name is not ("descriptor" or "target" or "session" or "input" or "json"))
+            if (name is not ("descriptor" or "target" or "session" or "input" or "request" or "source" or "json"))
             {
                 throw new CliUsageException($"Unknown option '--{name}'.");
             }
@@ -194,9 +226,11 @@ internal static class Cli
             throw new CliUsageException("Use either --descriptor or --target, not both.");
         }
 
-        if (options.ContainsKey("input") && options.ContainsKey("json"))
+        var payloadOptions = new[] { "input", "request", "source", "json" }
+            .Count(options.ContainsKey);
+        if (payloadOptions > 1)
         {
-            throw new CliUsageException("Use either --input or --json, not both.");
+            throw new CliUsageException("Use only one of --request, --input, --source, or --json.");
         }
 
         return options;
@@ -214,11 +248,13 @@ internal static class Cli
             """
             Usage:
               scry discover
-              scry <capabilities|roots|inspect|get|set|invoke|enumerate|release>
+              scry <capabilities|roots|inspect|get|set|invoke|enumerate|release|
+                    evaluate|execute|load-assembly|list-assemblies|find-types|describe-type>
                    (--descriptor <path> | --target <id-or-alias>)
-                   [--session <id>] [--input <file|-> | --json <object>]
+                   [--session <id>] [--request <file|-> | --source <file|->]
 
             Capability tokens are read from local descriptor files and are never accepted as arguments.
+            Redirected stdin is C# source for evaluate/execute and request JSON for other operations.
             """);
     }
 

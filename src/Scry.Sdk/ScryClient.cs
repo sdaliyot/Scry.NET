@@ -139,12 +139,63 @@ public sealed class ScryClient : IAsyncDisposable
         }
     }
 
+    public Task<ExecutionResult> EvaluateAsync(
+        ExecutionRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<ExecutionResult>("evaluate", request, cancellationToken);
+
+    public Task<ExecutionResult> ExecuteAsync(
+        ExecutionRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<ExecutionResult>("execute", request, cancellationToken);
+
+    public Task<LoadAssemblyResult> LoadAssemblyAsync(
+        LoadAssemblyRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<LoadAssemblyResult>("load-assembly", request, cancellationToken);
+
+    public Task<ListAssembliesResult> ListAssembliesAsync(
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<ListAssembliesResult>("list-assemblies", null, cancellationToken);
+
+    public Task<FindTypesResult> FindTypesAsync(
+        FindTypesRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<FindTypesResult>("find-types", request, cancellationToken);
+
+    public Task<TypeDescription> DescribeTypeAsync(
+        DescribeTypeRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<TypeDescription>("describe-type", request, cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             await _pipe.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    private async Task<T> RequestResultAsync<T>(
+        string operation,
+        object? payload,
+        CancellationToken cancellationToken)
+    {
+        var response = await RequestAsync(operation, payload, cancellationToken).ConfigureAwait(false);
+        if (!response.Success)
+        {
+            throw new ScryRemoteException(response);
+        }
+
+        if (response.Result is not { } result)
+        {
+            throw new ProtocolException(
+                $"Operation '{operation}' returned no {typeof(T).Name} result.");
+        }
+
+        return result.Deserialize<T>(ScryJson.Options)
+            ?? throw new ProtocolException(
+                $"Operation '{operation}' returned an invalid {typeof(T).Name} result.");
     }
 }
 

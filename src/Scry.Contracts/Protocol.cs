@@ -11,7 +11,11 @@ public static class ProtocolConstants
     public const int MaximumFrameBytes = 8 * 1024 * 1024;
 
     public static IReadOnlyList<string> CoreCapabilities { get; } = Array.AsReadOnly(
-        new[] { "capabilities", "roots", "inspect", "get", "set", "invoke", "enumerate", "release" });
+        new[]
+        {
+            "capabilities", "roots", "inspect", "get", "set", "invoke", "enumerate", "release",
+            "evaluate", "execute", "load-assembly", "list-assemblies", "find-types", "describe-type"
+        });
 
     public static IReadOnlyList<string> FeatureCapabilities { get; } = Array.AsReadOnly(
         new[] { "bounded-value-projection" });
@@ -55,7 +59,8 @@ public sealed record ProtocolError(
     string Code,
     string Message,
     ExceptionDetail? Exception = null,
-    IReadOnlyDictionary<string, string>? Data = null);
+    IReadOnlyDictionary<string, string>? Data = null,
+    IReadOnlyList<CompilationDiagnostic>? Diagnostics = null);
 
 public sealed record ExceptionDetail(
     string Type,

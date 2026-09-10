@@ -8,7 +8,9 @@ namespace Scry.Runtime;
 
 internal sealed class OperationDispatcher(
     TargetMetadata target,
-    AgentConfiguration configuration)
+    AgentConfiguration configuration,
+    AssemblyCatalog assemblies,
+    ExecutionEngine execution)
 {
     private const int MaximumEnumerationPayloadBytes =
         ProtocolConstants.MaximumFrameBytes - (1024 * 1024);
@@ -32,6 +34,12 @@ internal sealed class OperationDispatcher(
             "invoke" => await InvokeAsync(payload, session, cancellationToken).ConfigureAwait(false),
             "enumerate" => Enumerate(payload, session),
             "release" => Release(payload, session),
+            "evaluate" => await EvaluateAsync(payload, session, cancellationToken).ConfigureAwait(false),
+            "execute" => await ExecuteAsync(payload, session, cancellationToken).ConfigureAwait(false),
+            "load-assembly" => LoadAssembly(payload),
+            "list-assemblies" => ListAssemblies(),
+            "find-types" => FindTypes(payload),
+            "describe-type" => DescribeType(payload),
             _ => throw new ScryOperationException("operation_not_supported", $"Operation '{operation}' is not supported.")
         };
 
@@ -354,6 +362,47 @@ internal sealed class OperationDispatcher(
         return new { released };
     }
 
+    private async ValueTask<object> EvaluateAsync(
+        JsonElement payload,
+        SessionState session,
+        CancellationToken cancellationToken)
+    {
+        var request = Deserialize<ExecutionRequest>(payload);
+        var result = await execution.EvaluateAsync(request, session, cancellationToken).ConfigureAwait(false);
+        return new ExecutionResult(
+            Encode(result.Value, session),
+            result.Logs,
+            result.DroppedLogEntries,
+            result.Diagnostics,
+            result.ElapsedMilliseconds);
+    }
+
+    private async ValueTask<object> ExecuteAsync(
+        JsonElement payload,
+        SessionState session,
+        CancellationToken cancellationToken)
+    {
+        var request = Deserialize<ExecutionRequest>(payload);
+        var result = await execution.ExecuteAsync(request, session, cancellationToken).ConfigureAwait(false);
+        return new ExecutionResult(
+            Encode(result.Value, session),
+            result.Logs,
+            result.DroppedLogEntries,
+            result.Diagnostics,
+            result.ElapsedMilliseconds);
+    }
+
+    private object LoadAssembly(JsonElement payload) =>
+        new { assembly = assemblies.Load(Deserialize<LoadAssemblyRequest>(payload)) };
+
+    private object ListAssemblies() => new { assemblies = assemblies.List() };
+
+    private object FindTypes(JsonElement payload) =>
+        new { types = assemblies.FindTypes(Deserialize<FindTypesRequest>(payload)) };
+
+    private object DescribeType(JsonElement payload) =>
+        assemblies.DescribeType(Deserialize<DescribeTypeRequest>(payload));
+
     private object ResolveSubject(JsonElement payload, SessionState session)
     {
         if (payload.TryGetProperty("root", out var rootElement))
@@ -606,4 +655,8 @@ internal sealed class OperationDispatcher(
 
     private static int OptionalInt32(JsonElement payload, string name, int fallback) =>
         payload.TryGetProperty(name, out var value) ? value.GetInt32() : fallback;
+
+    private static T Deserialize<T>(JsonElement payload) =>
+        payload.Deserialize<T>(ScryJson.Options)
+        ?? throw new ScryOperationException("invalid_request", $"Request payload must be a {typeof(T).Name} object.");
 }

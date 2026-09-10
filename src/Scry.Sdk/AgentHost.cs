@@ -19,6 +19,26 @@ public sealed class AgentHostOptions
     public int MaximumHandlesPerSession { get; init; } = 4096;
 
     public int MaximumSessions { get; init; } = 256;
+
+    public int MaximumSourceLength { get; init; } = 256 * 1024;
+
+    public int MaximumExecutionMilliseconds { get; init; } = 120_000;
+
+    public int DefaultExecutionMilliseconds { get; init; } = 30_000;
+
+    public int MaximumExecutionReferences { get; init; } = 256;
+
+    public int MaximumExecutionImports { get; init; } = 64;
+
+    public int MaximumLogEntries { get; init; } = 256;
+
+    public int MaximumLogMessageLength { get; init; } = 4096;
+
+    public int MaximumTypeResults { get; init; } = 1000;
+
+    public int MaximumTypeMembers { get; init; } = 2000;
+
+    public long MaximumAssemblyBytes { get; init; } = 256L * 1024 * 1024;
 }
 
 public sealed class AgentBuilder
@@ -87,7 +107,17 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
                 SessionLease = selected.SessionLease,
                 MaximumPreviewLength = selected.MaximumPreviewLength,
                 MaximumHandlesPerSession = selected.MaximumHandlesPerSession,
-                MaximumSessions = selected.MaximumSessions
+                MaximumSessions = selected.MaximumSessions,
+                MaximumSourceLength = selected.MaximumSourceLength,
+                MaximumExecutionMilliseconds = selected.MaximumExecutionMilliseconds,
+                DefaultExecutionMilliseconds = selected.DefaultExecutionMilliseconds,
+                MaximumExecutionReferences = selected.MaximumExecutionReferences,
+                MaximumExecutionImports = selected.MaximumExecutionImports,
+                MaximumLogEntries = selected.MaximumLogEntries,
+                MaximumLogMessageLength = selected.MaximumLogMessageLength,
+                MaximumTypeResults = selected.MaximumTypeResults,
+                MaximumTypeMembers = selected.MaximumTypeMembers,
+                MaximumAssemblyBytes = selected.MaximumAssemblyBytes
             }));
     }
 

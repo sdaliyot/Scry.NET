@@ -34,7 +34,18 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             options.SessionLease <= TimeSpan.Zero ||
             options.MaximumPreviewLength < 1 ||
             options.MaximumHandlesPerSession < 1 ||
-            options.MaximumSessions < 1)
+            options.MaximumSessions < 1 ||
+            options.MaximumSourceLength < 1 ||
+            options.MaximumExecutionMilliseconds < 1 ||
+            options.DefaultExecutionMilliseconds < 1 ||
+            options.DefaultExecutionMilliseconds > options.MaximumExecutionMilliseconds ||
+            options.MaximumExecutionReferences < 1 ||
+            options.MaximumExecutionImports < 1 ||
+            options.MaximumLogEntries < 1 ||
+            options.MaximumLogMessageLength < 1 ||
+            options.MaximumTypeResults < 1 ||
+            options.MaximumTypeMembers < 1 ||
+            options.MaximumAssemblyBytes < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options),
@@ -69,7 +80,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             options.MaximumPreviewLength,
             options.MaximumHandlesPerSession,
             options.MaximumSessions);
-        _dispatcher = new(Metadata, configuration);
+        var assemblies = new AssemblyCatalog(options);
+        var execution = new ExecutionEngine(configuration, options, assemblies);
+        _dispatcher = new(Metadata, configuration, assemblies, execution);
         PublishDescriptor();
         _processExitHandler = (_, _) => CleanupDescriptor();
         AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
@@ -307,13 +320,22 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                     var actual = exception is TargetInvocationException { InnerException: { } inner }
                         ? inner
                         : exception;
-                    var code = actual is ScryOperationException operationException
-                        ? operationException.Code
-                        : "operation_failed";
+                    var code = actual switch
+                    {
+                        ScryOperationException operationException => operationException.Code,
+                        ScryCompilationException => "compilation_failed",
+                        OperationCanceledException => "operation_canceled",
+                        _ => "operation_failed"
+                    };
                     response = ProtocolResponse.Failed(
                         request.RequestId,
                         session.Id,
-                        new(code, actual.Message, ExceptionDetail.FromException(actual)));
+                        new(
+                            code,
+                            actual.Message,
+                            ExceptionDetail.FromException(actual),
+                            (actual as ScryOperationException)?.ErrorData,
+                            (actual as ScryCompilationException)?.Diagnostics));
                 }
 
                 await FrameCodec.WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);

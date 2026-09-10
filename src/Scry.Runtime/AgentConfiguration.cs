@@ -17,6 +17,26 @@ public sealed class RuntimeHostOptions
     public int MaximumHandlesPerSession { get; init; } = 4096;
 
     public int MaximumSessions { get; init; } = 256;
+
+    public int MaximumSourceLength { get; init; } = 256 * 1024;
+
+    public int MaximumExecutionMilliseconds { get; init; } = 120_000;
+
+    public int DefaultExecutionMilliseconds { get; init; } = 30_000;
+
+    public int MaximumExecutionReferences { get; init; } = 256;
+
+    public int MaximumExecutionImports { get; init; } = 64;
+
+    public int MaximumLogEntries { get; init; } = 256;
+
+    public int MaximumLogMessageLength { get; init; } = 4096;
+
+    public int MaximumTypeResults { get; init; } = 1000;
+
+    public int MaximumTypeMembers { get; init; } = 2000;
+
+    public long MaximumAssemblyBytes { get; init; } = 256L * 1024 * 1024;
 }
 
 public sealed class AgentConfiguration
@@ -67,7 +87,12 @@ public sealed record RegisteredOperation(
     Func<JsonElement, CancellationToken, ValueTask<object?>> Handler,
     string? Description);
 
-internal sealed class ScryOperationException(string code, string message) : Exception(message)
+internal sealed class ScryOperationException(
+    string code,
+    string message,
+    IReadOnlyDictionary<string, string>? errorData = null) : Exception(message)
 {
     public string Code { get; } = code;
+
+    public IReadOnlyDictionary<string, string>? ErrorData { get; } = errorData;
 }

@@ -445,6 +445,143 @@ public sealed class EmbeddedHostTests
     }
 
     [Fact]
+    public async Task Csharp_execution_evaluates_executes_awaits_logs_and_projects_values()
+    {
+        await using var fixture = TestHost.Start();
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+
+        var evaluated = await client.EvaluateAsync(new(
+            """
+            Context.Log("starting");
+            await Task.Delay(1, Context.CancellationToken);
+            return ((Scry.Tests.EmbeddedHostTests.TestState)Context.GetRoot("state")!).Count * 2;
+            """,
+            References: [typeof(EmbeddedHostTests).Assembly.GetName().Name!]));
+
+        Assert.Equal(14, evaluated.Value.Value!.Value.GetInt32());
+        Assert.Single(evaluated.Logs);
+        Assert.Equal("starting", evaluated.Logs[0].Message);
+        Assert.Equal(0, evaluated.DroppedLogEntries);
+
+        var projectedStruct = await client.EvaluateAsync(new(
+            """
+            return ((Scry.Tests.EmbeddedHostTests.TestState)Context.GetRoot("state")!).Position;
+            """,
+            References: [typeof(EmbeddedHostTests).Assembly.GetName().Name!]));
+        Assert.Equal("value", projectedStruct.Value.Kind);
+        Assert.Equal(
+            640,
+            projectedStruct.Value.Value!.Value
+                .GetProperty("Size")
+                .GetProperty("Width")
+                .GetInt32());
+        Assert.Null(projectedStruct.Value.Reference);
+
+        var executed = await client.ExecuteAsync(new(
+            """
+            var state = (Scry.Tests.EmbeddedHostTests.TestState)Context.GetRoot("state")!;
+            await Task.Yield();
+            state.Count = 19;
+            return state;
+            """));
+
+        Assert.Equal(19, fixture.State.Count);
+        Assert.Equal("reference", executed.Value.Kind);
+        Assert.Equal(typeof(TestState).FullName, executed.Value.Type);
+    }
+
+    [Fact]
+    public async Task Csharp_execution_reports_diagnostics_exceptions_limits_and_cooperative_timeout()
+    {
+        await using var fixture = TestHost.Start(
+            maximumSourceLength: 64,
+            maximumLogEntries: 1);
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+
+        var compilation = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest("return 1 +;"));
+        Assert.Equal("compilation_failed", compilation.Error?.Code);
+        var diagnostic = Assert.Single(compilation.Error?.Diagnostics ?? []);
+        Assert.Equal("Error", diagnostic.Severity);
+        Assert.NotNull(diagnostic.StartLine);
+        Assert.NotNull(diagnostic.StartColumn);
+
+        var failure = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest("throw new InvalidOperationException(\"script boom\");"));
+        Assert.Equal("operation_failed", failure.Error?.Code);
+        Assert.Equal(typeof(InvalidOperationException).FullName, failure.Error?.Exception?.Type);
+        Assert.Equal("script boom", failure.Error?.Exception?.Message);
+
+        var timedOut = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest(
+                "await Task.Delay(5000, Context.CancellationToken); return 1;",
+                TimeoutMilliseconds: 25));
+        Assert.Equal("execution_timed_out", timedOut.Error?.Code);
+        Assert.Equal("cooperative", timedOut.Error?.Data?["cancellation"]);
+
+        var oversized = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest(new string('x', 65)));
+        Assert.Equal("request_limit_exceeded", oversized.Error?.Code);
+
+        var logged = await client.EvaluateAsync(new(
+            "Context.Log(\"one\"); Context.Log(\"two\"); return 1;"));
+        Assert.Single(logged.Logs);
+        Assert.Equal(1, logged.DroppedLogEntries);
+    }
+
+    [Fact]
+    public async Task Assembly_operations_list_load_find_and_describe_target_types()
+    {
+        await using var fixture = TestHost.Start();
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+
+        var assemblies = await client.ListAssembliesAsync();
+        Assert.Contains(
+            assemblies.Assemblies,
+            assembly => assembly.Name == typeof(EmbeddedHostTests).Assembly.GetName().Name);
+
+        var types = await client.FindTypesAsync(new(
+            Query: nameof(TestState),
+            Assembly: typeof(EmbeddedHostTests).Assembly.GetName().Name));
+        Assert.Contains(types.Types, type => type.FullName == typeof(TestState).FullName);
+
+        var description = await client.DescribeTypeAsync(new(
+            typeof(TestState).FullName!,
+            typeof(EmbeddedHostTests).Assembly.GetName().Name));
+        Assert.Equal(typeof(TestState).FullName, description.Type.FullName);
+        Assert.Equal("Default", description.Type.LoadContext);
+        Assert.Contains(description.Members, member => member.Name == nameof(TestState.Count));
+
+        var defaultLoaded = await client.LoadAssemblyAsync(new(
+            typeof(ExternalReference).Assembly.Location,
+            "default"));
+        Assert.True(defaultLoaded.Assembly.IsDefaultLoadContext);
+        Assert.False(defaultLoaded.Assembly.IsCollectible);
+
+        var cliAssemblyPath = Directory.EnumerateFiles(
+                Path.Combine(FindRepositoryRoot(), "src", "Scry.Cli", "bin"),
+                "scry.dll",
+                SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .First();
+        var loaded = await client.LoadAssemblyAsync(new(cliAssemblyPath, "isolated"));
+        Assert.True(loaded.Assembly.IsCollectible);
+        Assert.False(loaded.Assembly.IsDefaultLoadContext);
+        Assert.StartsWith("Scry.Isolated.", loaded.Assembly.LoadContext, StringComparison.Ordinal);
+
+        var incompatibleReference = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest(
+                "return 1;",
+                References: [loaded.Assembly.FullName]));
+        Assert.Equal("assembly_not_compatible", incompatibleReference.Error?.Code);
+    }
+
+    [Fact]
     public async Task A_session_can_resume_and_use_existing_handles()
     {
         await using var fixture = TestHost.Start();
@@ -576,6 +713,54 @@ public sealed class EmbeddedHostTests
         Assert.DoesNotContain(descriptor.CapabilityToken, output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Cli_evaluates_source_from_a_file()
+    {
+        await using var fixture = TestHost.Start();
+        var root = FindRepositoryRoot();
+        var sourcePath = Path.Combine(Path.GetTempPath(), $"scry-{Guid.NewGuid():N}.csx");
+        await File.WriteAllTextAsync(sourcePath, "return 6 * 7;");
+        try
+        {
+            var cliPath = Directory.EnumerateFiles(
+                    Path.Combine(root, "src", "Scry.Cli", "bin"),
+                    "scry.dll",
+                    SearchOption.AllDirectories)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .First();
+            var startInfo = new ProcessStartInfo("dotnet")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+            startInfo.ArgumentList.Add(cliPath);
+            startInfo.ArgumentList.Add("evaluate");
+            startInfo.ArgumentList.Add("--descriptor");
+            startInfo.ArgumentList.Add(fixture.Host.DescriptorPath);
+            startInfo.ArgumentList.Add("--source");
+            startInfo.ArgumentList.Add(sourcePath);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start the scry CLI.");
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            Assert.True(process.ExitCode == 0, error);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(
+                42,
+                document.RootElement.GetProperty("result")
+                    .GetProperty("value")
+                    .GetProperty("value")
+                    .GetInt32());
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+        }
+    }
+
     private static ExternalReference ReferenceFrom(JsonElement remoteValue) =>
         remoteValue.GetProperty("reference").Deserialize<ExternalReference>(ScryJson.Options)
         ?? throw new InvalidOperationException("Expected a remote reference.");
@@ -642,7 +827,9 @@ public sealed class EmbeddedHostTests
             TimeSpan? handleLease = null,
             TimeSpan? sessionLease = null,
             int maximumSessions = 256,
-            int maximumHandlesPerSession = 4096)
+            int maximumHandlesPerSession = 4096,
+            int maximumSourceLength = 256 * 1024,
+            int maximumLogEntries = 256)
         {
             var state = new TestState();
             var host = AgentHost.Start(
@@ -666,7 +853,9 @@ public sealed class EmbeddedHostTests
                     HandleLease = handleLease ?? TimeSpan.FromMinutes(1),
                     SessionLease = sessionLease ?? TimeSpan.FromMinutes(5),
                     MaximumSessions = maximumSessions,
-                    MaximumHandlesPerSession = maximumHandlesPerSession
+                    MaximumHandlesPerSession = maximumHandlesPerSession,
+                    MaximumSourceLength = maximumSourceLength,
+                    MaximumLogEntries = maximumLogEntries
                 });
             return new(host, state);
         }
