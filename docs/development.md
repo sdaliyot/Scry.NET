@@ -49,13 +49,15 @@ All non-handshake requests use the negotiated session. Subjects are selected wit
 | `capabilities` | none |
 | `roots` | none |
 | `inspect` | root/reference, includeNonPublic |
-| `get` | root/reference, member, includeNonPublic |
-| `set` | root/reference, member, value, includeNonPublic |
-| `invoke` | root/reference + member + arguments, or registeredOperation + arguments |
-| `enumerate` | root/reference, offset, limit (1-1000) |
+| `get` | root/reference, member, includeNonPublic, asReference |
+| `set` | root/reference, member, value, includeNonPublic, asReference |
+| `invoke` | root/reference + member + arguments, or registeredOperation + arguments; asReference |
+| `enumerate` | root/reference, offset, limit (1-1000), asReferences |
 | `release` | handleId or handleIds |
 
-Values are returned as `RemoteValue`: scalars are inline and objects receive an `ExternalReference`. Passing a reference as an argument preserves object identity. Collection pages deliberately return handles for non-scalar items.
+Values are returned as `RemoteValue`. Existing scalar types remain inline as `kind: "scalar"`, reference types receive an `ExternalReference`, and other value types are returned as `kind: "value"` with the negotiated `bounded-value-projection` capability. Struct projections recurse through value types to four levels and 64 total members, represent nested strings longer than 1,024 characters with a truncated `$value` marker, report inaccessible or throwing members with `$error`, and stop at reference-type members with a type marker. They never consume leased handles, so repeated reads of an unchanged struct have value semantics rather than artificial boxed identity.
+
+Projections are bounded snapshots, not live subjects. A struct root remains directly inspectable by its registered root name. For a struct returned by `get`, `set`, or `invoke`, set `asReference: true` to deliberately lease that box for subsequent inspection or invocation; `enumerate` similarly accepts `asReferences: true` for value-type items. Explicit boxes consume handles and should be released. Projections containing `$reference`, `$truncated`, or `$error` markers are rejected as invocation/set arguments rather than silently fabricating omitted state. Enumeration also applies an aggregate response budget below the maximum frame size and sets `hasMore` when that budget ends a page early. Passing an `ExternalReference` as an argument preserves reference identity.
 
 The CLI reads request objects with `--input <file>`, `--input -`, redirected stdin, or `--json <object>`. Exit codes are stable: `0` success, `2` usage/JSON error, `3` target resolution error, `4` connection/authentication/protocol error, `5` target operation error, and `70` unexpected CLI failure. Tokens are never accepted as command-line options.
 

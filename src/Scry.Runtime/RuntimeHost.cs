@@ -267,7 +267,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 ProtocolConstants.Version,
                 Metadata,
                 session.Id,
-                ProtocolConstants.CoreCapabilities,
+                ProtocolConstants.AllCapabilities,
                 session.ExpiresAt);
             await FrameCodec.WriteAsync(
                 pipe,

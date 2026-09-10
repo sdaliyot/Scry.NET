@@ -174,7 +174,7 @@ internal sealed class SessionState : IDisposable
         return new OperationLease(this);
     }
 
-    public ExternalReference Lease(object value)
+    public ExternalReference Lease(object value, out bool created)
     {
         lock (_gate)
         {
@@ -183,6 +183,7 @@ internal sealed class SessionState : IDisposable
                 _handles.TryGetValue(existingId, out var existing))
             {
                 existing.ExpiresAt = DateTimeOffset.UtcNow.Add(_handleLease);
+                created = false;
                 return CreateReference(existingId, existing);
             }
 
@@ -197,6 +198,7 @@ internal sealed class SessionState : IDisposable
             var entry = new HandleEntry(value, DateTimeOffset.UtcNow.Add(_handleLease));
             _handles.Add(id, entry);
             _identities.Add(value, id);
+            created = true;
             return CreateReference(id, entry);
         }
     }

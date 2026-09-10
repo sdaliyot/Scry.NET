@@ -12,6 +12,12 @@ public static class ProtocolConstants
 
     public static IReadOnlyList<string> CoreCapabilities { get; } = Array.AsReadOnly(
         new[] { "capabilities", "roots", "inspect", "get", "set", "invoke", "enumerate", "release" });
+
+    public static IReadOnlyList<string> FeatureCapabilities { get; } = Array.AsReadOnly(
+        new[] { "bounded-value-projection" });
+
+    public static IReadOnlyList<string> AllCapabilities { get; } =
+        CoreCapabilities.Concat(FeatureCapabilities).ToArray();
 }
 
 public static class ScryJson

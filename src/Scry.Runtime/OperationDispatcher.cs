@@ -10,6 +10,13 @@ internal sealed class OperationDispatcher(
     TargetMetadata target,
     AgentConfiguration configuration)
 {
+    private const int MaximumEnumerationPayloadBytes =
+        ProtocolConstants.MaximumFrameBytes - (1024 * 1024);
+    private static readonly JsonSerializerOptions ArgumentJsonOptions = new(ScryJson.Options)
+    {
+        IncludeFields = true
+    };
+
     public async ValueTask<object?> DispatchAsync(
         string operation,
         JsonElement payload,
@@ -33,6 +40,7 @@ internal sealed class OperationDispatcher(
         target,
         protocolVersion = ProtocolConstants.Version,
         operations = ProtocolConstants.CoreCapabilities,
+        features = ProtocolConstants.FeatureCapabilities,
         registeredOperations = configuration.Operations.Values
             .Select(item => new { item.Name, item.Description })
             .OrderBy(item => item.Name, StringComparer.Ordinal)
@@ -121,7 +129,13 @@ internal sealed class OperationDispatcher(
             FieldInfo field => field.GetValue(subject),
             _ => throw new UnreachableException()
         };
-        return new { value = Encode(value, session) };
+        return new
+        {
+            value = Encode(
+                value,
+                session,
+                GetOptionalBoolean(payload, "asReference"))
+        };
     }
 
     private object Set(JsonElement payload, SessionState session)
@@ -145,7 +159,13 @@ internal sealed class OperationDispatcher(
                 throw new UnreachableException();
         }
 
-        return new { value = Encode(converted, session) };
+        return new
+        {
+            value = Encode(
+                converted,
+                session,
+                GetOptionalBoolean(payload, "asReference"))
+        };
     }
 
     private async ValueTask<object?> InvokeAsync(
@@ -171,7 +191,8 @@ internal sealed class OperationDispatcher(
             {
                 value = Encode(
                     await operation.Handler(arguments, cancellationToken).ConfigureAwait(false),
-                    session)
+                    session,
+                    GetOptionalBoolean(payload, "asReference"))
             };
         }
 
@@ -240,7 +261,13 @@ internal sealed class OperationDispatcher(
             result = valueTaskAsTask.GetType().GetProperty("Result")!.GetValue(valueTaskAsTask);
         }
 
-        return new { value = Encode(result, session) };
+        return new
+        {
+            value = Encode(
+                result,
+                session,
+                GetOptionalBoolean(payload, "asReference"))
+        };
     }
 
     private object Enumerate(JsonElement payload, SessionState session)
@@ -261,8 +288,10 @@ internal sealed class OperationDispatcher(
         }
 
         var items = new List<RemoteValue>();
+        var encodedBytes = 0;
         var index = 0;
         var hasMore = false;
+        var asReferences = GetOptionalBoolean(payload, "asReferences");
         var enumerator = enumerable.GetEnumerator();
         try
         {
@@ -279,7 +308,32 @@ internal sealed class OperationDispatcher(
                     break;
                 }
 
-                items.Add(Encode(enumerator.Current, session));
+                var item = Encode(
+                    enumerator.Current,
+                    session,
+                    asReferences,
+                    out var handleCreated);
+                var itemBytes = JsonSerializer.SerializeToUtf8Bytes(item, ScryJson.Options).Length;
+                if (encodedBytes + itemBytes > MaximumEnumerationPayloadBytes)
+                {
+                    if (handleCreated && item.Reference is not null)
+                    {
+                        session.Release(item.Reference.HandleId);
+                    }
+
+                    if (items.Count == 0)
+                    {
+                        throw new ScryOperationException(
+                            "value_too_large",
+                            "A collection item is too large for a protocol response.");
+                    }
+
+                    hasMore = true;
+                    break;
+                }
+
+                items.Add(item);
+                encodedBytes += itemBytes;
             }
         }
         finally
@@ -373,15 +427,28 @@ internal sealed class OperationDispatcher(
         throw new ScryOperationException("member_not_found", $"Writable member '{name}' was not found.");
     }
 
-    private RemoteValue Encode(object? value, SessionState session)
+    private RemoteValue Encode(
+        object? value,
+        SessionState session,
+        bool leaseValueType = false)
     {
+        return Encode(value, session, leaseValueType, out _);
+    }
+
+    private RemoteValue Encode(
+        object? value,
+        SessionState session,
+        bool leaseValueType,
+        out bool handleCreated)
+    {
+        handleCreated = false;
         if (value is null)
         {
             return new("null", "null", "null", JsonSerializer.SerializeToElement<object?>(null, ScryJson.Options));
         }
 
         var type = value.GetType();
-        if (IsScalar(type))
+        if (ValueProjection.IsScalar(type))
         {
             return new(
                 "scalar",
@@ -390,7 +457,16 @@ internal sealed class OperationDispatcher(
                 JsonSerializer.SerializeToElement(value, type, ScryJson.Options));
         }
 
-        var reference = session.Lease(value);
+        if (type.IsValueType && !leaseValueType)
+        {
+            return new(
+                "value",
+                TypeName(type),
+                session.Preview(value),
+                ValueProjection.Project(value));
+        }
+
+        var reference = session.Lease(value, out handleCreated);
         return new("reference", reference.Type, reference.Preview, null, reference);
     }
 
@@ -411,7 +487,41 @@ internal sealed class OperationDispatcher(
             return resolved;
         }
 
-        return element.Deserialize(targetType, ScryJson.Options);
+        if (ContainsIncompleteProjection(element))
+        {
+            throw new ScryOperationException(
+                "incomplete_value_projection",
+                "A truncated, faulted, or reference-bearing value projection cannot be used as an argument.");
+        }
+
+        return element.Deserialize(targetType, ArgumentJsonOptions);
+    }
+
+    private static bool ContainsIncompleteProjection(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Name is "$reference" or "$truncated" or "$error" ||
+                    ContainsIncompleteProjection(property.Value))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (ContainsIncompleteProjection(item))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool TryGetReferenceElement(JsonElement element, out JsonElement referenceElement)
@@ -464,13 +574,6 @@ internal sealed class OperationDispatcher(
             return false;
         }
     }
-
-    private static bool IsScalar(Type type) =>
-        type.IsPrimitive || type.IsEnum ||
-        type == typeof(string) || type == typeof(decimal) ||
-        type == typeof(Guid) || type == typeof(DateTime) ||
-        type == typeof(DateTimeOffset) || type == typeof(TimeSpan) ||
-        type == typeof(Uri);
 
     private static string TypeName(Type type) => type.FullName ?? type.Name;
 

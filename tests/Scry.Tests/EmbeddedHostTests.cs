@@ -25,6 +25,7 @@ public sealed class EmbeddedHostTests
             await using var client = await ScryClient.ConnectAsync(descriptorPath);
             Assert.Equal(targetId, client.Handshake.Target.TargetId);
             Assert.Contains("inspect", client.Handshake.Capabilities);
+            Assert.Contains("bounded-value-projection", client.Handshake.Capabilities);
 
             var capabilities = await client.RequestAsync("capabilities");
             Assert.True(capabilities.Success);
@@ -234,6 +235,176 @@ public sealed class EmbeddedHostTests
         await Task.Delay(250);
         var expired = await first.RequestAsync("inspect", new { reference = expiringReference });
         Assert.Equal("handle_not_found", expired.Error?.Code);
+    }
+
+    [Fact]
+    public async Task Struct_reads_use_bounded_value_projection_without_consuming_handles()
+    {
+        await using var fixture = TestHost.Start(maximumHandlesPerSession: 1);
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+        JsonElement projectedPosition = default;
+
+        for (var index = 0; index < 10; index++)
+        {
+            var response = await client.RequestAsync("get", new
+            {
+                root = "state",
+                member = "Position"
+            });
+            Assert.True(response.Success, response.Error?.Message);
+            var remoteValue = response.Result!.Value.GetProperty("value");
+            Assert.Equal("value", remoteValue.GetProperty("kind").GetString());
+            Assert.False(remoteValue.TryGetProperty("reference", out _));
+
+            var projection = remoteValue.GetProperty("value");
+            Assert.Equal(12, projection.GetProperty("X").GetInt32());
+            Assert.Equal(34, projection.GetProperty("Y").GetInt32());
+            Assert.Equal(
+                640,
+                projection.GetProperty("Size").GetProperty("Width").GetInt32());
+            Assert.Equal(
+                typeof(StructSize).FullName,
+                projection.GetProperty("Size").GetProperty("$type").GetString());
+            Assert.True(
+                projection.GetProperty("Owner").GetProperty("$reference").GetBoolean());
+            Assert.Equal(
+                1024,
+                projection
+                    .GetProperty("Description")
+                    .GetProperty("$value")
+                    .GetString()!
+                    .Length);
+            Assert.Equal(
+                "string",
+                projection
+                    .GetProperty("Description")
+                    .GetProperty("$truncated")
+                    .GetString());
+            projectedPosition = projection.Clone();
+        }
+
+        var incompleteArgument = await client.RequestAsync("invoke", new
+        {
+            root = "state",
+            member = "AcceptPosition",
+            arguments = new[] { projectedPosition }
+        });
+        Assert.Equal("incomplete_value_projection", incompleteArgument.Error?.Code);
+
+        var boxed = await client.RequestAsync("get", new
+        {
+            root = "state",
+            member = "Position",
+            asReference = true
+        });
+        var boxedReference = ReferenceFrom(boxed.Result!.Value.GetProperty("value"));
+        var inspected = await client.RequestAsync("inspect", new { reference = boxedReference });
+        Assert.True(inspected.Success, inspected.Error?.Message);
+        Assert.Contains(
+            inspected.Result!.Value.GetProperty("members").EnumerateArray(),
+            member => member.GetProperty("name").GetString() == "Size");
+        var released = await client.RequestAsync("release", new
+        {
+            handleId = boxedReference.HandleId
+        });
+        Assert.Equal(1, released.Result!.Value.GetProperty("released").GetInt32());
+
+        var child = await client.RequestAsync("get", new
+        {
+            root = "state",
+            member = "Child"
+        });
+        Assert.True(child.Success, child.Error?.Message);
+        Assert.Equal(
+            "reference",
+            child.Result!.Value.GetProperty("value").GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public async Task Struct_projection_is_bounded_and_reports_member_failures()
+    {
+        await using var fixture = TestHost.Start();
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+
+        var fragile = await client.RequestAsync("get", new
+        {
+            root = "state",
+            member = "Fragile"
+        });
+        Assert.True(fragile.Success, fragile.Error?.Message);
+        var fragileProjection = fragile.Result!.Value
+            .GetProperty("value")
+            .GetProperty("value");
+        Assert.Equal(7, fragileProjection.GetProperty("Safe").GetInt32());
+        Assert.Equal(
+            typeof(InvalidOperationException).FullName,
+            fragileProjection.GetProperty("Explodes").GetProperty("$error").GetString());
+
+        var deep = await client.RequestAsync("get", new
+        {
+            root = "state",
+            member = "Deep"
+        });
+        Assert.True(deep.Success, deep.Error?.Message);
+        var deepProjection = deep.Result!.Value
+            .GetProperty("value")
+            .GetProperty("value");
+        Assert.Equal(
+            "depth",
+            deepProjection
+                .GetProperty("Next")
+                .GetProperty("Next")
+                .GetProperty("Next")
+                .GetProperty("Next")
+                .GetProperty("$truncated")
+                .GetString());
+
+        var fields = await client.RequestAsync("get", new
+        {
+            root = "state",
+            member = "Fields"
+        });
+        var fieldProjection = fields.Result!.Value
+            .GetProperty("value")
+            .GetProperty("value")
+            .Clone();
+        Assert.Equal(23, fieldProjection.GetProperty("Value").GetInt32());
+        var roundTrip = await client.RequestAsync("invoke", new
+        {
+            root = "state",
+            member = "ReadFields",
+            arguments = new[] { fieldProjection }
+        });
+        Assert.Equal(23, ScalarFrom(roundTrip));
+    }
+
+    [Fact]
+    public async Task Struct_collection_projection_respects_the_frame_budget()
+    {
+        await using var fixture = TestHost.Start();
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+        var roots = await client.RequestAsync("roots");
+        var wideStructs = roots.Result!.Value.GetProperty("roots")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "wideStructs");
+        var reference = ReferenceFrom(wideStructs.GetProperty("value"));
+
+        var page = await client.RequestAsync("enumerate", new
+        {
+            reference,
+            limit = 1000
+        });
+
+        Assert.True(page.Success, page.Error?.Message);
+        Assert.True(page.Result!.Value.GetProperty("hasMore").GetBoolean());
+        var returned = page.Result.Value.GetProperty("returned").GetInt32();
+        Assert.InRange(returned, 1, 999);
+        Assert.All(
+            page.Result.Value.GetProperty("items").EnumerateArray(),
+            item => Assert.Equal("value", item.GetProperty("kind").GetString()));
+        Assert.True(
+            JsonSerializer.SerializeToUtf8Bytes(page, ScryJson.Options).Length <
+            ProtocolConstants.MaximumFrameBytes);
     }
 
     [Fact]
@@ -470,13 +641,15 @@ public sealed class EmbeddedHostTests
         public static TestHost Start(
             TimeSpan? handleLease = null,
             TimeSpan? sessionLease = null,
-            int maximumSessions = 256)
+            int maximumSessions = 256,
+            int maximumHandlesPerSession = 4096)
         {
             var state = new TestState();
             var host = AgentHost.Start(
                 builder => builder
                     .RegisterValue("state", state)
                     .RegisterValue("numbers", state.Numbers)
+                    .RegisterValue("wideStructs", state.WideStructs)
                     .RegisterOperation(
                         "echo",
                         arguments => new EchoResult(arguments.GetProperty("message").GetString()))
@@ -492,7 +665,8 @@ public sealed class EmbeddedHostTests
                     Alias = $"test-{Guid.NewGuid():N}",
                     HandleLease = handleLease ?? TimeSpan.FromMinutes(1),
                     SessionLease = sessionLease ?? TimeSpan.FromMinutes(5),
-                    MaximumSessions = maximumSessions
+                    MaximumSessions = maximumSessions,
+                    MaximumHandlesPerSession = maximumHandlesPerSession
                 });
             return new(host, state);
         }
@@ -502,11 +676,42 @@ public sealed class EmbeddedHostTests
 
     public sealed class TestState : TestStateBase
     {
+        public TestState()
+        {
+            var text = new string('w', 2048);
+            WideStructs = Enumerable.Repeat(
+                    new WideStruct(text, text, text, text, text, text, text, text),
+                    1000)
+                .ToList();
+        }
+
         public int Count { get; set; } = 7;
 
         public List<int> Numbers { get; } = [1, 2, 3, 4];
 
+        public List<WideStruct> WideStructs { get; }
+
         public int PublicWithPrivateSetter { get; private set; } = 3;
+
+        public StructPosition Position { get; } =
+            new(
+                12,
+                34,
+                new StructSize(640, 480),
+                new ChildState(),
+                new string('p', 2048));
+
+        public FragileStruct Fragile => new();
+
+        public FieldStruct Fields => new() { Value = 23 };
+
+        public DeepLevel1 Deep => new(
+            new DeepLevel2(
+                new DeepLevel3(
+                    new DeepLevel4(
+                        new DeepLevel5(5)))));
+
+        public ChildState Child { get; } = new();
 
         private string Secret { get; set; } = "hidden";
 
@@ -519,6 +724,10 @@ public sealed class EmbeddedHostTests
         }
 
         public string ReadHandleId(HandlePayload payload) => payload.HandleId;
+
+        public int AcceptPosition(StructPosition position) => position.X;
+
+        public int ReadFields(FieldStruct value) => value.Value;
 
         public string Ambiguous(int value) => $"int:{value}";
 
@@ -537,4 +746,49 @@ public sealed class EmbeddedHostTests
     public sealed record EchoResult(string? Message);
 
     public sealed record HandlePayload(string HandleId);
+
+    public sealed class ChildState
+    {
+    }
+
+    public readonly record struct StructPosition(
+        int X,
+        int Y,
+        StructSize Size,
+        ChildState Owner,
+        string Description);
+
+    public readonly record struct StructSize(int Width, int Height);
+
+    public readonly struct FragileStruct
+    {
+        public int Explodes => throw new InvalidOperationException("Projection failure.");
+
+        public int Safe => 7;
+    }
+
+    public readonly record struct DeepLevel1(DeepLevel2 Next);
+
+    public readonly record struct DeepLevel2(DeepLevel3 Next);
+
+    public readonly record struct DeepLevel3(DeepLevel4 Next);
+
+    public readonly record struct DeepLevel4(DeepLevel5 Next);
+
+    public readonly record struct DeepLevel5(int Value);
+
+    public readonly record struct WideStruct(
+        string A,
+        string B,
+        string C,
+        string D,
+        string E,
+        string F,
+        string G,
+        string H);
+
+    public struct FieldStruct
+    {
+        public int Value;
+    }
 }
