@@ -53,13 +53,19 @@ internal sealed class OperationDispatcher(
                 .Concat(new[] { ProtocolConstants.UiThreadMarshallingFeature })
                 .ToArray(),
         registeredOperations = configuration.DescribeOperations()
-            .Select(item => new { item.Name, item.Description })
             .OrderBy(item => item.Name, StringComparer.Ordinal)
+            .ToArray(),
+        guidance = new
+        {
+            discovery = "Inspect roots and registered operation metadata before acting.",
+            safety = "Prefer read-only operations. Obtain confirmation before invoking operations marked requiresConfirmation.",
+            threading = "Operations marked ui-owner marshal through their UI adapter; worker-thread operations must not directly access UI-owned state."
+        }
     };
 
     private object Roots(SessionState session) => new
     {
-        roots = configuration.Roots.Values
+        roots = configuration.GetRoots()
             .OrderBy(item => item.Name, StringComparer.Ordinal)
             .Select(item => new
             {
@@ -188,7 +194,17 @@ internal sealed class OperationDispatcher(
         {
             var operationName = operationElement.GetString()
                 ?? throw new ScryOperationException("invalid_request", "registeredOperation must be a string.");
-            if (configuration.TryGetContextualOperation(operationName, out var contextualOperation))
+            if (!configuration.TryResolveOperation(
+                operationName,
+                out var operation,
+                out var contextualOperation))
+            {
+                throw new ScryOperationException(
+                    "operation_not_found",
+                    $"Registered operation '{operationName}' does not exist.");
+            }
+
+            if (contextualOperation is not null)
             {
                 var contextualArguments = payload.TryGetProperty("arguments", out var contextualArgs)
                     ? contextualArgs
@@ -201,20 +217,13 @@ internal sealed class OperationDispatcher(
                 };
             }
 
-            if (!configuration.Operations.TryGetValue(operationName, out var operation))
-            {
-                throw new ScryOperationException(
-                    "operation_not_found",
-                    $"Registered operation '{operationName}' does not exist.");
-            }
-
             var arguments = payload.TryGetProperty("arguments", out var args)
                 ? args
                 : JsonSerializer.SerializeToElement(new { }, ScryJson.Options);
             return new
             {
                 value = Encode(
-                    await operation.Handler(arguments, context.CancellationToken).ConfigureAwait(false),
+                    await operation!.Handler(arguments, context.CancellationToken).ConfigureAwait(false),
                     session,
                     GetOptionalBoolean(payload, "asReference"))
             };
@@ -426,7 +435,7 @@ internal sealed class OperationDispatcher(
         {
             var rootName = rootElement.GetString()
                 ?? throw new ScryOperationException("invalid_request", "root must be a string.");
-            if (!configuration.Roots.TryGetValue(rootName, out var root))
+            if (!configuration.TryGetRoot(rootName, out var root))
             {
                 throw new ScryOperationException("root_not_found", $"Root '{rootName}' does not exist.");
             }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.ObjectModel;
 
 namespace Scry.Runtime;
 
@@ -70,13 +71,34 @@ public delegate Task<object?> ExecutionMarshaller(
 
 public sealed class AgentConfiguration
 {
+    private readonly object _gate = new();
     private readonly Dictionary<string, RegisteredRoot> _roots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RegisteredOperation> _operations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ContextualOperation> _contextualOperations = new(StringComparer.Ordinal);
 
-    public IReadOnlyDictionary<string, RegisteredRoot> Roots => _roots;
+    public IReadOnlyDictionary<string, RegisteredRoot> Roots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return new ReadOnlyDictionary<string, RegisteredRoot>(
+                    new Dictionary<string, RegisteredRoot>(_roots, StringComparer.Ordinal));
+            }
+        }
+    }
 
-    public IReadOnlyDictionary<string, RegisteredOperation> Operations => _operations;
+    public IReadOnlyDictionary<string, RegisteredOperation> Operations
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return new ReadOnlyDictionary<string, RegisteredOperation>(
+                    new Dictionary<string, RegisteredOperation>(_operations, StringComparer.Ordinal));
+            }
+        }
+    }
 
     /// <summary>
     /// Null unless the host registered one, in which case evaluate/execute accept
@@ -99,7 +121,14 @@ public sealed class AgentConfiguration
         ExecutionMarshaller = marshaller;
     }
 
-    public void AddRoot(string name, Func<object?> valueFactory, string? description = null)
+    public void AddRoot(string name, Func<object?> valueFactory, string? description = null) =>
+        AddRoot(name, valueFactory, description, replaceExisting: false);
+
+    public void AddRoot(
+        string name,
+        Func<object?> valueFactory,
+        string? description,
+        bool replaceExisting)
     {
         ValidateName(name);
         if (valueFactory is null)
@@ -107,18 +136,38 @@ public sealed class AgentConfiguration
             throw new ArgumentNullException(nameof(valueFactory));
         }
 
-        if (_roots.ContainsKey(name))
+        lock (_gate)
         {
-            throw new ArgumentException($"A root named '{name}' is already registered.", nameof(name));
-        }
+            if (!replaceExisting && _roots.ContainsKey(name))
+            {
+                throw new ArgumentException($"A root named '{name}' is already registered.", nameof(name));
+            }
 
-        _roots.Add(name, new(name, valueFactory, description));
+            _roots[name] = new(name, valueFactory, description);
+        }
     }
 
     public void AddOperation(
         string name,
         Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
-        string? description = null)
+        string? description = null) =>
+        AddOperation(
+            name,
+            handler,
+            description,
+            "worker-thread",
+            isReadOnly: false,
+            requiresConfirmation: false,
+            replaceExisting: false);
+
+    public void AddOperation(
+        string name,
+        Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
+        string? description,
+        string executionPolicy,
+        bool isReadOnly,
+        bool requiresConfirmation,
+        bool replaceExisting)
     {
         ValidateName(name);
         if (handler is null)
@@ -126,18 +175,46 @@ public sealed class AgentConfiguration
             throw new ArgumentNullException(nameof(handler));
         }
 
-        if (_contextualOperations.ContainsKey(name) || _operations.ContainsKey(name))
+        lock (_gate)
         {
-            throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
-        }
+            if (!replaceExisting &&
+                (_operations.ContainsKey(name) || _contextualOperations.ContainsKey(name)))
+            {
+                throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
+            }
 
-        _operations.Add(name, new(name, handler, description));
+            _contextualOperations.Remove(name);
+            _operations[name] = new(
+                name,
+                handler,
+                description,
+                executionPolicy,
+                isReadOnly,
+                requiresConfirmation);
+        }
     }
 
     public void AddContextualOperation(
         string name,
         Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
-        string? description = null)
+        string? description = null) =>
+        AddContextualOperation(
+            name,
+            handler,
+            description,
+            "worker-thread",
+            isReadOnly: false,
+            requiresConfirmation: false,
+            replaceExisting: false);
+
+    public void AddContextualOperation(
+        string name,
+        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
+        string? description,
+        string executionPolicy,
+        bool isReadOnly,
+        bool requiresConfirmation,
+        bool replaceExisting)
     {
         ValidateName(name);
         if (handler is null)
@@ -145,21 +222,110 @@ public sealed class AgentConfiguration
             throw new ArgumentNullException(nameof(handler));
         }
 
-        if (_operations.ContainsKey(name) || _contextualOperations.ContainsKey(name))
+        lock (_gate)
         {
-            throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
-        }
+            if (!replaceExisting &&
+                (_operations.ContainsKey(name) || _contextualOperations.ContainsKey(name)))
+            {
+                throw new ArgumentException($"An operation named '{name}' is already registered.", nameof(name));
+            }
 
-        _contextualOperations.Add(name, new(name, handler, description));
+            _operations.Remove(name);
+            _contextualOperations[name] = new(
+                name,
+                handler,
+                description,
+                executionPolicy,
+                isReadOnly,
+                requiresConfirmation);
+        }
     }
 
-    internal IEnumerable<(string Name, string? Description)> DescribeOperations() =>
-        _operations.Values
-            .Select(operation => (operation.Name, operation.Description))
-            .Concat(_contextualOperations.Values.Select(operation => (operation.Name, operation.Description)));
+    public bool RemoveRoot(string name)
+    {
+        ValidateName(name);
+        lock (_gate)
+        {
+            return _roots.Remove(name);
+        }
+    }
 
-    internal bool TryGetContextualOperation(string name, out ContextualOperation operation) =>
-        _contextualOperations.TryGetValue(name, out operation!);
+    public bool RemoveOperation(string name)
+    {
+        ValidateName(name);
+        lock (_gate)
+        {
+            return _operations.Remove(name) | _contextualOperations.Remove(name);
+        }
+    }
+
+    internal IReadOnlyList<RegisteredRoot> GetRoots()
+    {
+        lock (_gate)
+        {
+            return _roots.Values.ToArray();
+        }
+    }
+
+    internal IReadOnlyList<RegisteredOperationDescription> DescribeOperations()
+    {
+        lock (_gate)
+        {
+            return _operations.Values
+                .Select(ToDescription)
+                .Concat(_contextualOperations.Values.Select(ToDescription))
+                .ToArray();
+        }
+    }
+
+    internal bool TryGetRoot(string name, out RegisteredRoot root)
+    {
+        lock (_gate)
+        {
+            return _roots.TryGetValue(name, out root!);
+        }
+    }
+
+    internal bool TryResolveOperation(
+        string name,
+        out RegisteredOperation? operation,
+        out ContextualOperation? contextualOperation)
+    {
+        lock (_gate)
+        {
+            if (_contextualOperations.TryGetValue(name, out contextualOperation))
+            {
+                operation = null;
+                return true;
+            }
+
+            if (_operations.TryGetValue(name, out operation))
+            {
+                contextualOperation = null;
+                return true;
+            }
+
+            operation = null;
+            contextualOperation = null;
+            return false;
+        }
+    }
+
+    private static RegisteredOperationDescription ToDescription(RegisteredOperation operation) =>
+        new(
+            operation.Name,
+            operation.Description,
+            operation.ExecutionPolicy,
+            operation.IsReadOnly,
+            operation.RequiresConfirmation);
+
+    private static RegisteredOperationDescription ToDescription(ContextualOperation operation) =>
+        new(
+            operation.Name,
+            operation.Description,
+            operation.ExecutionPolicy,
+            operation.IsReadOnly,
+            operation.RequiresConfirmation);
 
     private static void ValidateName(string name)
     {
@@ -175,12 +341,34 @@ public sealed record RegisteredRoot(string Name, Func<object?> ValueFactory, str
 public sealed record RegisteredOperation(
     string Name,
     Func<JsonElement, CancellationToken, ValueTask<object?>> Handler,
-    string? Description);
+    string? Description,
+    string ExecutionPolicy,
+    bool IsReadOnly,
+    bool RequiresConfirmation)
+{
+    public RegisteredOperation(
+        string name,
+        Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
+        string? description)
+        : this(name, handler, description, "worker-thread", false, false)
+    {
+    }
+}
 
 internal sealed record ContextualOperation(
     string Name,
     Func<JsonElement, OperationExecutionContext, ValueTask<object?>> Handler,
-    string? Description);
+    string? Description,
+    string ExecutionPolicy,
+    bool IsReadOnly,
+    bool RequiresConfirmation);
+
+internal sealed record RegisteredOperationDescription(
+    string Name,
+    string? Description,
+    string ExecutionPolicy,
+    bool IsReadOnly,
+    bool RequiresConfirmation);
 
 public sealed class OperationExecutionContext
 {

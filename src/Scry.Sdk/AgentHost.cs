@@ -60,32 +60,83 @@ public sealed class AgentHostOptions
     }
 }
 
-public sealed class AgentBuilder
+public enum AgentRegistrationMode
 {
-    internal AgentConfiguration Configuration { get; } = new();
+    RejectDuplicate,
+    ReplaceExisting
+}
 
-    public AgentBuilder RegisterRoot(string name, Func<object?> valueFactory, string? description = null)
+public enum AgentOperationExecutionPolicy
+{
+    WorkerThread,
+    UiOwner
+}
+
+public sealed record AgentOperationPolicy
+{
+    public AgentOperationExecutionPolicy ExecutionPolicy { get; init; } =
+        AgentOperationExecutionPolicy.WorkerThread;
+
+    public bool IsReadOnly { get; init; }
+
+    public bool RequiresConfirmation { get; init; }
+}
+
+public sealed class AgentRegistrationRegistry
+{
+    internal AgentRegistrationRegistry(AgentConfiguration configuration)
     {
-        Configuration.AddRoot(name, valueFactory, description);
+        Configuration = configuration;
+    }
+
+    internal AgentConfiguration Configuration { get; }
+
+    public AgentRegistrationRegistry RegisterRoot(
+        string name,
+        Func<object?> valueFactory,
+        string? description = null,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+    {
+        Configuration.AddRoot(
+            name,
+            valueFactory,
+            description,
+            mode == AgentRegistrationMode.ReplaceExisting);
         return this;
     }
 
-    public AgentBuilder RegisterValue(string name, object? value, string? description = null) =>
-        RegisterRoot(name, () => value, description);
+    public AgentRegistrationRegistry RegisterValue(
+        string name,
+        object? value,
+        string? description = null,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate) =>
+        RegisterRoot(name, () => value, description, mode);
 
-    public AgentBuilder RegisterOperation(
+    public AgentRegistrationRegistry RegisterOperation(
         string name,
         Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
-        string? description = null)
+        string? description = null,
+        AgentOperationPolicy? policy = null,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
     {
-        Configuration.AddOperation(name, handler, description);
+        var selectedPolicy = policy ?? new AgentOperationPolicy();
+        Configuration.AddOperation(
+            name,
+            handler,
+            description,
+            ToWireName(selectedPolicy.ExecutionPolicy),
+            selectedPolicy.IsReadOnly,
+            selectedPolicy.RequiresConfirmation,
+            mode == AgentRegistrationMode.ReplaceExisting);
         return this;
     }
 
-    public AgentBuilder RegisterOperation(
+    public AgentRegistrationRegistry RegisterOperation(
         string name,
         Func<JsonElement, object?> handler,
-        string? description = null)
+        string? description = null,
+        AgentOperationPolicy? policy = null,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
     {
         if (handler is null)
         {
@@ -95,7 +146,150 @@ public sealed class AgentBuilder
         return RegisterOperation(
             name,
             (arguments, _) => new ValueTask<object?>(handler(arguments)),
-            description);
+            description,
+            policy,
+            mode);
+    }
+
+    public AgentRegistrationRegistry RegisterJobOperation(
+        string name,
+        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
+        string? description = null,
+        AgentOperationPolicy? policy = null,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+    {
+        var selectedPolicy = policy ?? new AgentOperationPolicy();
+        Configuration.AddContextualOperation(
+            name,
+            handler,
+            description,
+            ToWireName(selectedPolicy.ExecutionPolicy),
+            selectedPolicy.IsReadOnly,
+            selectedPolicy.RequiresConfirmation,
+            mode == AgentRegistrationMode.ReplaceExisting);
+        return this;
+    }
+
+    public bool UnregisterRoot(string name) => Configuration.RemoveRoot(name);
+
+    public bool UnregisterOperation(string name) => Configuration.RemoveOperation(name);
+
+    private static string ToWireName(AgentOperationExecutionPolicy policy) =>
+        policy switch
+        {
+            AgentOperationExecutionPolicy.WorkerThread => "worker-thread",
+            AgentOperationExecutionPolicy.UiOwner => "ui-owner",
+            _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, null)
+        };
+}
+
+public sealed class AgentBuilder
+{
+    public AgentBuilder()
+    {
+        Registrations = new(new AgentConfiguration());
+    }
+
+    internal AgentConfiguration Configuration => Registrations.Configuration;
+
+    internal AgentRegistrationRegistry Registrations { get; }
+
+    public AgentBuilder RegisterRoot(
+        string name,
+        Func<object?> valueFactory,
+        string? description = null) =>
+        RegisterRoot(name, valueFactory, description, AgentRegistrationMode.RejectDuplicate);
+
+    public AgentBuilder RegisterRoot(
+        string name,
+        Func<object?> valueFactory,
+        string? description,
+        AgentRegistrationMode mode)
+    {
+        Registrations.RegisterRoot(name, valueFactory, description, mode);
+        return this;
+    }
+
+    public AgentBuilder RegisterValue(
+        string name,
+        object? value,
+        string? description = null) =>
+        RegisterValue(name, value, description, AgentRegistrationMode.RejectDuplicate);
+
+    public AgentBuilder RegisterValue(
+        string name,
+        object? value,
+        string? description,
+        AgentRegistrationMode mode)
+    {
+        Registrations.RegisterValue(name, value, description, mode);
+        return this;
+    }
+
+    public AgentBuilder RegisterOperation(
+        string name,
+        Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
+        string? description = null) =>
+        RegisterOperation(
+            name,
+            handler,
+            description,
+            policy: null,
+            AgentRegistrationMode.RejectDuplicate);
+
+    public AgentBuilder RegisterOperation(
+        string name,
+        Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
+        string? description,
+        AgentOperationPolicy? policy,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+    {
+        Registrations.RegisterOperation(name, handler, description, policy, mode);
+        return this;
+    }
+
+    public AgentBuilder RegisterOperation(
+        string name,
+        Func<JsonElement, object?> handler,
+        string? description = null) =>
+        RegisterOperation(
+            name,
+            handler,
+            description,
+            policy: null,
+            AgentRegistrationMode.RejectDuplicate);
+
+    public AgentBuilder RegisterOperation(
+        string name,
+        Func<JsonElement, object?> handler,
+        string? description,
+        AgentOperationPolicy? policy,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+    {
+        Registrations.RegisterOperation(name, handler, description, policy, mode);
+        return this;
+    }
+
+    public AgentBuilder RegisterJobOperation(
+        string name,
+        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
+        string? description = null) =>
+        RegisterJobOperation(
+            name,
+            handler,
+            description,
+            policy: null,
+            AgentRegistrationMode.RejectDuplicate);
+
+    public AgentBuilder RegisterJobOperation(
+        string name,
+        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
+        string? description,
+        AgentOperationPolicy? policy,
+        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+    {
+        Registrations.RegisterJobOperation(name, handler, description, policy, mode);
+        return this;
     }
 
     /// <summary>
@@ -108,24 +302,16 @@ public sealed class AgentBuilder
         Configuration.SetExecutionMarshaller(marshaller);
         return this;
     }
-
-    public AgentBuilder RegisterJobOperation(
-        string name,
-        Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
-        string? description = null)
-    {
-        Configuration.AddContextualOperation(name, handler, description);
-        return this;
-    }
 }
 
 public sealed class AgentHost : IAsyncDisposable, IDisposable
 {
     private readonly RuntimeHost _runtime;
 
-    private AgentHost(RuntimeHost runtime)
+    private AgentHost(RuntimeHost runtime, AgentRegistrationRegistry registrations)
     {
         _runtime = runtime;
+        Registrations = registrations;
     }
 
     public TargetMetadata Metadata => _runtime.Metadata;
@@ -134,6 +320,8 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
 
     public string DescriptorPath => _runtime.DescriptorPath;
 
+    public AgentRegistrationRegistry Registrations { get; }
+
     public static AgentHost Start(
         Action<AgentBuilder>? configure = null,
         AgentHostOptions? options = null)
@@ -141,7 +329,7 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
         var builder = new AgentBuilder();
         configure?.Invoke(builder);
         var selected = options ?? new AgentHostOptions();
-        return new(RuntimeHost.Start(
+        var runtime = RuntimeHost.Start(
             builder.Configuration,
             new RuntimeHostOptions
             {
@@ -166,7 +354,8 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
                 MaximumJobs = selected.MaximumJobs,
                 MaximumJobLogEntries = selected.MaximumJobLogEntries,
                 MaximumJobLogMessageLength = selected.MaximumJobLogMessageLength
-            }));
+            });
+        return new(runtime, builder.Registrations);
     }
 
     public void Dispose() => _runtime.Dispose();

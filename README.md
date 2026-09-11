@@ -4,7 +4,7 @@ Scry.NET is a Windows-only developer and test framework for inspecting and delib
 
 Two hosting models are planned:
 
-- **Embedded mode (implemented):** the target opts in with `Scry.Sdk`, registers roots, values, and operations, and starts an `AgentHost`.
+- **Embedded mode (implemented):** the target opts in with `Scry.Sdk`, registers described roots, values, and policy-tagged operations, and starts an `AgentHost`. Registrations can also be replaced or removed safely while the host is running.
 - **Attach mode (future):** tooling injects or loads the runtime into an existing managed process. Injection is not part of this foundation.
 
 The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. Injection and an agent Skill remain deferred.
@@ -29,7 +29,7 @@ dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
 dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
 ```
 
-Run `dotnet run --project samples\Scry.SampleHost`, then use the emitted descriptor path:
+Run any embedded sample, then use the emitted descriptor path:
 
 ```powershell
 dotnet run --project src\Scry.Cli -- capabilities --descriptor <path>
@@ -41,6 +41,49 @@ dotnet run --project src\Scry.Cli -- scenario --input scenario.json
 ```
 
 See [`docs/development.md`](docs/development.md) for protocol and extension guidance.
+
+## Embedded SDK
+
+Register the smallest intentional surface an agent needs. Root factories are evaluated per request, registered values retain a stable object, and operation descriptions and policy metadata are returned by `capabilities`:
+
+```csharp
+using var host = AgentHost.Start(
+    builder => builder
+        .RegisterRoot("orders", () => orderState, "Current order processing state.")
+        .RegisterValue("service.name", "checkout", "Stable service identity.")
+        .RegisterOperation(
+            "orders.reprocess",
+            ReprocessOrder,
+            "Reprocesses one order.",
+            new AgentOperationPolicy { RequiresConfirmation = true }),
+    new AgentHostOptions { Alias = "checkout-worker" });
+```
+
+Each registered operation reports `executionPolicy` (`worker-thread` or `ui-owner`), `isReadOnly`, and `requiresConfirmation`. These fields document the handler's contract; `ui-owner` means the handler or adapter performs the required marshalling, not that the core runtime guesses a dispatcher. Agents should call `roots` and `capabilities` first, prefer described read-only operations, request approval before confirmation-required operations, and avoid raw reflection mutation when a named helper exists.
+
+Runtime registration changes are atomic:
+
+```csharp
+host.Registrations.RegisterValue(
+    "feature.flags",
+    refreshedFlags,
+    "Current feature flags.",
+    AgentRegistrationMode.ReplaceExisting);
+host.Registrations.UnregisterOperation("orders.reprocess");
+```
+
+Duplicate registration throws unless `ReplaceExisting` is selected. Replacement affects subsequent lookups; existing leased references remain valid until released or expired. Unregistration is idempotent through its `bool` result and does not revoke already leased objects or stop an operation/job that has already started.
+
+Runnable integrations cover every supported process style:
+
+| Sample | Process type | Domain flow |
+|---|---|---|
+| `samples\Scry.SampleHost` | Console | Set/inspect a counter, run a recalculation job |
+| `samples\Scry.SampleWorker` | Long-running worker | Change queue mode, inspect heartbeats, drain work as a job |
+| `samples\Scry.SampleWpf` | WPF | Update dispatcher-owned editor state, assert projected UI, load as a job |
+| `samples\Scry.SampleWinForms` | WinForms | Update owner-thread order state, assert controls, import as a job |
+
+Each prints `Target` and `Descriptor` on startup and exits cleanly when Enter is sent. See the development guide for complete adoption and validation flows.
 
 ## Optional desktop adapters
 
@@ -58,7 +101,7 @@ using var host = AgentHost.Start(builder => builder.UseWinForms(
     winForms => winForms.RegisterRoot("main", mainForm)));
 ```
 
-The adapters register `wpf.*` or `winforms.*` snapshot, wait, assertion, and screenshot operations. Their projections are deliberately bounded and framework-specific. WPF visual and logical trees are separate views; WinForms exposes managed controls, open/owned forms, tool strips and menus, and bindings. Neither adapter claims to represent owner-drawn pixels, WebView2/ActiveX content, native child windows, popups/separate HWNDs, or out-of-process surfaces completely.
+The adapters register `wpf.*` or `winforms.*` snapshot, wait, assertion, and screenshot operations as read-only, `ui-owner` helpers. Their projections are deliberately bounded and framework-specific. WPF visual and logical trees are separate views; WinForms exposes managed controls, open/owned forms, tool strips and menus, and bindings. Neither adapter claims to represent owner-drawn pixels, WebView2/ActiveX content, native child windows, popups/separate HWNDs, or out-of-process surfaces completely.
 
 ## Running a submission on the UI thread
 

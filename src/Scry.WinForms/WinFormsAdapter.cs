@@ -22,6 +22,11 @@ public static class WinFormsAgentBuilderExtensions
         var adapterBuilder = new WinFormsAdapterBuilder(dispatcherOwner, options);
         configure?.Invoke(adapterBuilder);
         var adapter = adapterBuilder.Build();
+        var readOnlyUiPolicy = new AgentOperationPolicy
+        {
+            ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+            IsReadOnly = true
+        };
 
         builder.RegisterValue(
             "winforms",
@@ -36,19 +41,23 @@ public static class WinFormsAgentBuilderExtensions
             "winforms.snapshot",
             async (arguments, cancellationToken) =>
                 (object?)await adapter.SnapshotAsync(arguments, cancellationToken).ConfigureAwait(false),
-            "Projects Application.OpenForms and registered Control roots with explicit bounds.");
+            "Projects Application.OpenForms and registered Control roots with explicit bounds.",
+            readOnlyUiPolicy);
         builder.RegisterOperation(
             "winforms.wait",
             adapter.WaitAsync,
-            "Waits for a bounded Windows Forms condition without blocking the UI thread.");
+            "Waits for a bounded Windows Forms condition without blocking the UI thread.",
+            readOnlyUiPolicy);
         builder.RegisterOperation(
             "winforms.assert",
             adapter.AssertAsync,
-            "Asserts a bounded Windows Forms condition.");
+            "Asserts a bounded Windows Forms condition.",
+            readOnlyUiPolicy);
         builder.RegisterOperation(
             "winforms.screenshot",
             adapter.ScreenshotAsync,
-            "Captures a registered Control with DrawToBitmap when supported.");
+            "Captures a registered Control with DrawToBitmap when supported.",
+            readOnlyUiPolicy);
         return builder;
     }
 }

@@ -26,6 +26,7 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scry.Contracts\Scry.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Scry.Runtime\Scry.Runtime.csproj" />
@@ -34,6 +35,30 @@
                       ReferenceOutputAssembly="false"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
     <ProjectReference Include="..\..\samples\Scry.SampleHost\Scry.SampleHost.csproj" ReferenceOutputAssembly="false" />
+    <!-- Modern-TFM only: this sample is not multi-targeted, so a net472 leg cannot reference it. -->
+    <ProjectReference Include="..\..\samples\Scry.SampleWorker\Scry.SampleWorker.csproj"
+                      ReferenceOutputAssembly="false"
+                      Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
   </ItemGroup>
+
+  <!--
+    The desktop samples are launched as separate processes by SampleIntegrationTests rather than
+    referenced, so they are built through an MSBuild task instead of a ProjectReference.
+
+    RemoveProperties="TargetFramework" is load-bearing: the MSBuild task otherwise inherits this
+    project's current global TargetFramework, so the net472 inner build would try to build these
+    net9.0-windows samples as net472 and fail with NETSDK1136. The target is also scoped to the
+    modern leg so the samples are not built twice, once per inner build.
+  -->
+  <Target Name="BuildDesktopSamples"
+          BeforeTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(TargetFramework)' == '$(ScryModernTargetFramework)'">
+    <MSBuild
+      Projects="..\..\samples\Scry.SampleWpf\Scry.SampleWpf.csproj;..\..\samples\Scry.SampleWinForms\Scry.SampleWinForms.csproj"
+      Targets="Build"
+      BuildInParallel="true"
+      RemoveProperties="TargetFramework"
+      Properties="Configuration=$(Configuration)" />
+  </Target>
 
 </Project>

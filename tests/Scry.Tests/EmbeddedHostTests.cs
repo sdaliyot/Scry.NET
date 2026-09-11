@@ -10,6 +10,87 @@ namespace Scry.Tests;
 public sealed class EmbeddedHostTests
 {
     [Fact]
+    public async Task Runtime_registrations_replace_unregister_and_surface_agent_policy()
+    {
+        await using var fixture = TestHost.Start();
+        await using var client = await ScryClient.ConnectAsync(fixture.Host.DescriptorPath);
+        var registry = fixture.Host.Registrations;
+
+        registry.RegisterValue("dynamic", 1, "Initial dynamic value.");
+        Assert.Throws<ArgumentException>(() => registry.RegisterValue("dynamic", 2));
+        registry.RegisterValue(
+            "dynamic",
+            2,
+            "Replacement dynamic value.",
+            AgentRegistrationMode.ReplaceExisting);
+        registry.RegisterOperation(
+            "state.update",
+            arguments => arguments.GetProperty("value").GetInt32(),
+            "Updates sample state after explicit approval.",
+            new AgentOperationPolicy
+            {
+                RequiresConfirmation = true
+            });
+        registry.RegisterOperation(
+            "state.read",
+            _ => fixture.State.Count,
+            "Reads sample state without mutation.",
+            new AgentOperationPolicy
+            {
+                ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+                IsReadOnly = true
+            });
+
+        var roots = await client.RequestAsync("roots");
+        var dynamicRoot = roots.Result!.Value.GetProperty("roots")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "dynamic");
+        Assert.Equal("Replacement dynamic value.", dynamicRoot.GetProperty("description").GetString());
+        Assert.Equal(2, dynamicRoot.GetProperty("value").GetProperty("value").GetInt32());
+
+        var capabilities = await client.RequestAsync("capabilities");
+        var registered = capabilities.Result!.Value.GetProperty("registeredOperations")
+            .EnumerateArray()
+            .ToDictionary(item => item.GetProperty("name").GetString()!, StringComparer.Ordinal);
+        Assert.Equal(
+            "Updates sample state after explicit approval.",
+            registered["state.update"].GetProperty("description").GetString());
+        Assert.Equal(
+            "worker-thread",
+            registered["state.update"].GetProperty("executionPolicy").GetString());
+        Assert.False(registered["state.update"].GetProperty("isReadOnly").GetBoolean());
+        Assert.True(registered["state.update"].GetProperty("requiresConfirmation").GetBoolean());
+        Assert.Equal("ui-owner", registered["state.read"].GetProperty("executionPolicy").GetString());
+        Assert.True(registered["state.read"].GetProperty("isReadOnly").GetBoolean());
+
+        registry.RegisterJobOperation(
+            "state.update",
+            (arguments, _) => new ValueTask<object?>(arguments.GetProperty("value").GetInt32() * 2),
+            "Replacement job-capable updater.",
+            mode: AgentRegistrationMode.ReplaceExisting);
+        var replaced = await client.RequestAsync("invoke", new
+        {
+            registeredOperation = "state.update",
+            arguments = new { value = 3 }
+        });
+        Assert.Equal(6, ScalarFrom(replaced));
+
+        Assert.True(registry.UnregisterRoot("dynamic"));
+        Assert.False(registry.UnregisterRoot("dynamic"));
+        Assert.True(registry.UnregisterOperation("state.update"));
+        Assert.False(registry.UnregisterOperation("state.update"));
+        Assert.DoesNotContain(
+            (await client.RequestAsync("roots")).Result!.Value.GetProperty("roots").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "dynamic");
+        var removed = await client.RequestAsync("invoke", new
+        {
+            registeredOperation = "state.update",
+            arguments = new { value = 3 }
+        });
+        Assert.Equal("operation_not_found", removed.Error?.Code);
+    }
+
+    [Fact]
     public async Task Host_supports_handshake_discovery_and_cleans_up()
     {
         string descriptorPath;

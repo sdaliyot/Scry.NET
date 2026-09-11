@@ -10,7 +10,10 @@
 | `Scry.Wpf` | Optional dispatcher-safe WPF projections, waits/assertions, screenshots |
 | `Scry.WinForms` | Optional control-owner-marshalled WinForms projections, waits/assertions, screenshots |
 | `Scry.Cli` | Stateless `scry` JSON command line |
-| `Scry.SampleHost` | Non-UI embedded example |
+| `Scry.SampleHost` | Console embedded example |
+| `Scry.SampleWorker` | Long-running background/worker embedded example |
+| `Scry.SampleWpf` | Minimal runnable WPF embedded example |
+| `Scry.SampleWinForms` | Minimal runnable WinForms embedded example |
 | `Scry.Tests` | Protocol, runtime, and discovery tests |
 | `Scry.Wpf.Tests` | STA dispatcher tests for the optional WPF adapter |
 | `Scry.WinForms.Tests` | STA message-loop tests for the optional WinForms adapter |
@@ -47,13 +50,17 @@ Start the endpoint once and keep the returned host alive:
 ```csharp
 using var host = AgentHost.Start(
     builder => builder
-        .RegisterValue("services", serviceProvider)
-        .RegisterRoot("current", () => currentState)
-        .RegisterOperation("reset", (_, _) =>
-        {
-            currentState.Reset();
-            return ValueTask.FromResult<object?>(null);
-        }),
+        .RegisterValue("services", serviceProvider, "Application service provider.")
+        .RegisterRoot("current", () => currentState, "Current test state.")
+        .RegisterOperation(
+            "reset",
+            (_, _) =>
+            {
+                currentState.Reset();
+                return ValueTask.FromResult<object?>(null);
+            },
+            "Resets current state to its test baseline.",
+            new AgentOperationPolicy { RequiresConfirmation = true }),
     new AgentHostOptions
     {
         Alias = "my-test-target",
@@ -62,6 +69,47 @@ using var host = AgentHost.Start(
 ```
 
 `RegisterValue` retains a specific object, while `RegisterRoot` evaluates its factory for each request. Registered operations receive structured JSON rather than source text. `RegisterJobOperation` additionally receives an `OperationExecutionContext` with the operation ID, correlation ID, cooperative `CancellationToken`, and bounded job logger. Session, handle, and job limits; lease and retention durations; aliases; preview length; and log bounds are configurable. A retained job keeps its qualified session addressable until the job is removed.
+
+Operation registrations accept an optional `AgentOperationPolicy`:
+
+- `ExecutionPolicy` defaults to `WorkerThread`. Set it to `UiOwner` only when the handler or an adapter marshals all UI-owned access itself.
+- `IsReadOnly` tells an agent that the helper is intended only to observe state. It is guidance, not a process security boundary.
+- `RequiresConfirmation` tells an agent to obtain explicit approval before invocation.
+
+Descriptions and all three policy fields are emitted under `registeredOperations` by `capabilities`. The response also includes agent guidance: discover first, prefer read-only helpers, honor confirmation requirements, and keep worker-thread code away from UI-owned state. The `roots` response includes each root name, description, and projected value. Names should be stable and domain-specific; descriptions should explain intent, side effects, expected arguments, and important bounds clearly enough for an AI agent to select the safe operation without reading application source.
+
+### Registration lifetime
+
+The builder's registrations remain available as `host.Registrations` for runtime changes. Registration snapshots and lookups are synchronized, so discovery and invocation see either the old registration or the complete replacement:
+
+```csharp
+host.Registrations.RegisterRoot(
+    "current",
+    () => replacementState,
+    "Current replacement state.",
+    AgentRegistrationMode.ReplaceExisting);
+
+var removed = host.Registrations.UnregisterOperation("reset");
+```
+
+The default `RejectDuplicate` mode preserves startup typo detection. `ReplaceExisting` can replace a root factory/value or switch an operation between normal and job-aware handlers. `UnregisterRoot` and `UnregisterOperation` return `true` only when an entry existed. Replacement and removal govern future name resolution. They do not invalidate handles already leased from an earlier root, and they do not cancel an invocation or job that already captured a handler. Normal handle leases, explicit `release`, job cancellation, and host disposal remain the lifecycle controls for that work.
+
+### Process-specific adoption
+
+| Process | Startup and threading guidance | Runnable sample |
+|---|---|---|
+| Console | Start one host near process startup; dispose it before exit. Worker handlers must cooperate with cancellation. | `samples\Scry.SampleHost` |
+| Worker/service | Keep the host alive for the service lifetime. Expose domain state rather than infrastructure internals, and make long work a `RegisterJobOperation`. | `samples\Scry.SampleWorker` |
+| WPF | Start on the application dispatcher and call `UseWpf`. Custom UI operations must marshal through `Dispatcher`; label them `UiOwner`. | `samples\Scry.SampleWpf` |
+| WinForms | Create the owner handle on its UI thread before `UseWinForms`. Custom UI operations must use the owner control for marshalling and be labeled `UiOwner`. | `samples\Scry.SampleWinForms` |
+
+All four samples register a root factory, a retained value, a domain operation, and a cancellable job operation. A realistic agent flow is:
+
+1. Run `capabilities` and inspect descriptions, safety flags, and execution policy.
+2. Run `roots` and choose the described domain root rather than guessing object names.
+3. Invoke the domain mutation only after honoring `requiresConfirmation`.
+4. Verify through `get`/`inspect`; desktop agents should additionally use `wpf.assert` or `winforms.assert`.
+5. Start longer work with `jobs start`, then use the returned qualified handle with `jobs wait`, `jobs logs`, or `jobs cancel`.
 
 ### Desktop adapter integration
 
@@ -77,9 +125,9 @@ builder.UseWinForms(
     adapter => adapter.RegisterRoot("main", mainForm));
 ```
 
-`UseWpf` registers a `wpf` service root plus `wpf.snapshot`, `wpf.wait`, `wpf.assert`, and `wpf.screenshot`. Calls marshal through the selected `Dispatcher`. Snapshot payloads accept `tree` (`visual` or `logical`) and optional `root`; waits/assertions add `path`, `name`, `automationId`, `state`, `expected`, and optional timeout/poll intervals.
+`UseWpf` registers a `wpf` service root plus `wpf.snapshot`, `wpf.wait`, `wpf.assert`, and `wpf.screenshot`. These helpers are described as read-only with `ui-owner` execution policy. Calls marshal through the selected `Dispatcher`. Snapshot payloads accept `tree` (`visual` or `logical`) and optional `root`; waits/assertions add `path`, `name`, `automationId`, `state`, `expected`, and optional timeout/poll intervals.
 
-`UseWinForms` registers a `winforms` service root plus `winforms.snapshot`, `winforms.wait`, `winforms.assert`, and `winforms.screenshot`. Calls marshal through the selected owner control with `BeginInvoke`; construct the adapter after that control has created its handle. Snapshot payloads accept an optional `root`; waits/assertions add `path`, `name`, `state`, `expected`, and optional timeout/poll intervals.
+`UseWinForms` registers a `winforms` service root plus `winforms.snapshot`, `winforms.wait`, `winforms.assert`, and `winforms.screenshot`. These helpers are described as read-only with `ui-owner` execution policy. Calls marshal through the selected owner control with `BeginInvoke`; construct the adapter after that control has created its handle. Snapshot payloads accept an optional `root`; waits/assertions add `path`, `name`, `state`, `expected`, and optional timeout/poll intervals.
 
 Both adapters also expose typed `WpfAdapter`/`WinFormsAdapter` services and condition/result models for reusable in-process test code. Maximum depth/node counts, wait defaults, and screenshot dimensions and encoded byte sizes are configurable. A negative assertion is inconclusive when its bounded projection is truncated.
 

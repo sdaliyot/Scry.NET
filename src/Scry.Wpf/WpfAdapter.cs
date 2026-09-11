@@ -52,6 +52,11 @@ public static class WpfAgentBuilderExtensions
 
     private static void Register(AgentBuilder builder, WpfAdapter adapter)
     {
+        var readOnlyUiPolicy = new AgentOperationPolicy
+        {
+            ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+            IsReadOnly = true
+        };
         builder.RegisterValue("wpf", adapter, "Dispatcher-marshalled WPF inspection service.");
 
         // Lets evaluate/execute opt into the dispatcher with "marshal": "ui", so a submission can
@@ -63,19 +68,23 @@ public static class WpfAgentBuilderExtensions
             "wpf.snapshot",
             async (arguments, cancellationToken) =>
                 (object?)await adapter.SnapshotAsync(arguments, cancellationToken).ConfigureAwait(false),
-            "Creates a bounded visual or logical WPF tree projection.");
+            "Creates a bounded visual or logical WPF tree projection.",
+            readOnlyUiPolicy);
         builder.RegisterOperation(
             "wpf.wait",
             adapter.WaitAsync,
-            "Waits for a bounded WPF element-state condition without blocking the dispatcher.");
+            "Waits for a bounded WPF element-state condition without blocking the dispatcher.",
+            readOnlyUiPolicy);
         builder.RegisterOperation(
             "wpf.assert",
             adapter.AssertAsync,
-            "Asserts a bounded WPF element-state condition.");
+            "Asserts a bounded WPF element-state condition.",
+            readOnlyUiPolicy);
         builder.RegisterOperation(
             "wpf.screenshot",
             adapter.ScreenshotAsync,
-            "Attempts a bounded RenderTargetBitmap capture and explicitly reports unsupported cases.");
+            "Attempts a bounded RenderTargetBitmap capture and explicitly reports unsupported cases.",
+            readOnlyUiPolicy);
     }
 }
 

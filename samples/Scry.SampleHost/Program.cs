@@ -10,8 +10,18 @@ var waitForStdin = args.Contains("--wait-for-stdin", StringComparer.Ordinal);
 var state = new SampleState();
 await using var host = AgentHost.Start(
     builder => builder
-        .RegisterValue("app", state, "Mutable non-UI sample state.")
+        .RegisterRoot("app", () => state, "Current mutable console application state.")
         .RegisterValue("numbers", state.Numbers, "A pageable collection.")
+        .RegisterValue("sample.kind", "console", "Identifies this embedded sample process.")
+        .RegisterOperation(
+            "counter.set",
+            arguments =>
+            {
+                state.Count = arguments.GetProperty("value").GetInt32();
+                return state.Count;
+            },
+            "Sets the console counter to an explicit value.",
+            new AgentOperationPolicy { RequiresConfirmation = true })
         .RegisterOperation(
             "echo",
             arguments => new
@@ -20,7 +30,8 @@ await using var host = AgentHost.Start(
                     ? value.GetString()
                     : null
             },
-            "Returns the supplied message.")
+            "Returns the supplied message.",
+            new AgentOperationPolicy { IsReadOnly = true })
         .RegisterJobOperation(
             "delay",
             async (arguments, context) =>
@@ -31,7 +42,22 @@ await using var host = AgentHost.Start(
                 context.Log("Delay completed.");
                 return $"{startedAt}:{DateTimeOffset.UtcNow.UtcTicks}:{Process.GetCurrentProcess().Id}";
             },
-            "Waits cooperatively and returns the process identity."),
+            "Waits cooperatively and returns the process identity.",
+            new AgentOperationPolicy { IsReadOnly = true })
+        .RegisterJobOperation(
+            "counter.recalculate",
+            async (arguments, context) =>
+            {
+                context.Log("Counter recalculation started.");
+                await Task.Delay(
+                    arguments.GetProperty("milliseconds").GetInt32(),
+                    context.CancellationToken);
+                state.Count = arguments.GetProperty("value").GetInt32();
+                context.Log("Counter recalculation completed.");
+                return state.Count;
+            },
+            "Recalculates the counter as a cancellable background job.",
+            new AgentOperationPolicy { RequiresConfirmation = true }),
     new AgentHostOptions { Alias = alias, Aliases = ["scry-sample"] });
 
 Console.WriteLine($"Target: {host.TargetId}");

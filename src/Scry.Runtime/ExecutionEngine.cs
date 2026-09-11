@@ -119,7 +119,7 @@ internal sealed class ExecutionEngine
         var logs = new ExecutionLogBuffer(
             _options.MaximumLogEntries,
             _options.MaximumLogMessageLength);
-        var roots = _configuration.Roots.Values.ToDictionary(
+        var roots = _configuration.GetRoots().ToDictionary(
             item => item.Name,
             item => item.ValueFactory(),
             StringComparer.Ordinal);
