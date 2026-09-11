@@ -7,7 +7,7 @@ Two hosting models are planned:
 - **Embedded mode (implemented):** the target opts in with `Scry.Sdk`, registers described roots, values, and policy-tagged operations, and starts an `AgentHost`. Registrations can also be replaced or removed safely while the host is running.
 - **Attach mode (future):** tooling injects or loads the runtime into an existing managed process. Injection is not part of this foundation.
 
-The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. Injection and an agent Skill remain deferred.
+The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md). Injection remains deferred.
 
 | Component | Supported targets |
 |---|---|
@@ -36,9 +36,23 @@ dotnet run --project src\Scry.Cli -- capabilities --descriptor <path>
 dotnet run --project src\Scry.Cli -- roots --descriptor <path>
 dotnet run --project src\Scry.Cli -- evaluate --descriptor <path> --source expression.csx
 Get-Content statements.csx | dotnet run --project src\Scry.Cli -- execute --descriptor <path>
-dotnet run --project src\Scry.Cli -- jobs start --target scry-sample --json '{"operation":"invoke","payload":{"registeredOperation":"delay","arguments":{"milliseconds":1000}}}'
+dotnet run --project src\Scry.Cli -- jobs start --target scry-sample --request job-start.json
 dotnet run --project src\Scry.Cli -- scenario --input scenario.json
 ```
+
+Run `scry --help` or `scry help <command>` for examples and the stable exit-code contract.
+`scry schema` emits the deterministic machine-readable command, argument, request, result,
+and exit-code catalog. Request payloads should come from `--request <file|->` (or
+`--input`) and C# source from `--source <file|->` or redirected stdin; agents never need
+to put source or secrets on a command line. Direct `wpf.*` and `winforms.*` CLI commands
+translate to their registered structured operations and return their structured adapter
+result inline before the ephemeral CLI session closes.
+
+AI coding agents should follow the comprehensive
+[`skills/scry/SKILL.md`](skills/scry/SKILL.md) workflow. It covers discovery and safe
+target selection, structured inspection before code execution, desktop and non-UI
+recipes, waits/assertions, jobs, multi-process scenarios, retries, expected JSON shapes,
+and security boundaries.
 
 See [`docs/development.md`](docs/development.md) for protocol and extension guidance.
 

@@ -12,6 +12,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
+using Scry.Contracts;
 using Scry.Sdk;
 
 namespace Scry.Wpf;
@@ -67,22 +68,33 @@ public static class WpfAgentBuilderExtensions
         builder.RegisterOperation(
             "wpf.snapshot",
             async (arguments, cancellationToken) =>
-                (object?)await adapter.SnapshotAsync(arguments, cancellationToken).ConfigureAwait(false),
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.SnapshotAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Creates a bounded visual or logical WPF tree projection.",
             readOnlyUiPolicy);
         builder.RegisterOperation(
             "wpf.wait",
-            adapter.WaitAsync,
+            async (arguments, cancellationToken) =>
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.WaitAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Waits for a bounded WPF element-state condition without blocking the dispatcher.",
             readOnlyUiPolicy);
         builder.RegisterOperation(
             "wpf.assert",
-            adapter.AssertAsync,
+            async (arguments, cancellationToken) =>
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.AssertAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Asserts a bounded WPF element-state condition.",
             readOnlyUiPolicy);
         builder.RegisterOperation(
             "wpf.screenshot",
-            adapter.ScreenshotAsync,
+            async (arguments, cancellationToken) =>
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.ScreenshotAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Attempts a bounded RenderTargetBitmap capture and explicitly reports unsupported cases.",
             readOnlyUiPolicy);
     }

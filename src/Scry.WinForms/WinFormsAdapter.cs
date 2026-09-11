@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Text.Json;
 using System.Windows.Forms;
+using Scry.Contracts;
 using Scry.Sdk;
 
 namespace Scry.WinForms;
@@ -40,22 +41,33 @@ public static class WinFormsAgentBuilderExtensions
         builder.RegisterOperation(
             "winforms.snapshot",
             async (arguments, cancellationToken) =>
-                (object?)await adapter.SnapshotAsync(arguments, cancellationToken).ConfigureAwait(false),
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.SnapshotAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Projects Application.OpenForms and registered Control roots with explicit bounds.",
             readOnlyUiPolicy);
         builder.RegisterOperation(
             "winforms.wait",
-            adapter.WaitAsync,
+            async (arguments, cancellationToken) =>
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.WaitAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Waits for a bounded Windows Forms condition without blocking the UI thread.",
             readOnlyUiPolicy);
         builder.RegisterOperation(
             "winforms.assert",
-            adapter.AssertAsync,
+            async (arguments, cancellationToken) =>
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.AssertAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Asserts a bounded Windows Forms condition.",
             readOnlyUiPolicy);
         builder.RegisterOperation(
             "winforms.screenshot",
-            adapter.ScreenshotAsync,
+            async (arguments, cancellationToken) =>
+                (object?)JsonSerializer.SerializeToElement(
+                    await adapter.ScreenshotAsync(arguments, cancellationToken).ConfigureAwait(false),
+                    ScryJson.Options),
             "Captures a registered Control with DrawToBitmap when supported.",
             readOnlyUiPolicy);
         return builder;

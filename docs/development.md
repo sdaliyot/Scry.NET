@@ -203,9 +203,37 @@ Values are returned as `RemoteValue`. Existing scalar types remain inline as `ki
 
 Projections are bounded snapshots, not live subjects. A struct root remains directly inspectable by its registered root name. For a struct returned by `get`, `set`, or `invoke`, set `asReference: true` to deliberately lease that box for subsequent inspection or invocation; `enumerate` similarly accepts `asReferences: true` for value-type items. Explicit boxes consume handles and should be released. Projections containing `$reference`, `$truncated`, or `$error` markers are rejected as invocation/set arguments rather than silently fabricating omitted state. Enumeration also applies an aggregate response budget below the maximum frame size and sets `hasMore` when that budget ends a page early. Passing an `ExternalReference` as an argument preserves reference identity.
 
-The CLI reads request objects with `--request <file|->` (or the compatible `--input` spelling). `evaluate` and `execute` accept C# through `--source <file|->` or redirected stdin. Rich execution settings belong in a request JSON file. Inline `--json` remains available for non-execution compatibility, but execution source is deliberately not forced onto command lines. Exit codes are stable: `0` success, `2` usage/JSON error, `3` target resolution error, `4` connection/authentication/protocol error, `5` target operation error, and `70` unexpected CLI failure. Tokens are never accepted as command-line options.
+The CLI reads request objects with `--request <file|->` (or the compatible `--input` spelling). `evaluate` and `execute` accept C# through `--source <file|->` or redirected stdin. Rich execution settings belong in a request JSON file. Inline `--json` remains available for non-execution compatibility, but execution source is deliberately not forced onto command lines. Exit codes are stable: `0` success, `2` usage/JSON error, `3` target resolution error, `4` connection/authentication/protocol error, `5` target operation error, `6` scenario partial failure, and `70` unexpected CLI failure. Tokens are never accepted as command-line options.
 
 Fresh CLI connections negotiate ephemeral sessions that are removed on disconnect, so stateless command use does not retain target resources. Passing `--session` resumes a persistent session instead; callers own its handles until release or lease expiry.
+
+### CLI and agent contract
+
+The CLI is the sole agent interface in this release. `scry --help` provides the complete
+top-level surface, and every command supports `scry help <command>` or a trailing
+`--help`. `scry schema` (also available as `scry --json-schema`) emits a deterministic
+JSON catalog generated from the same command definitions used by CLI validation. It
+documents selectors, input modes, request fields, response envelopes, result shapes, and
+all exit codes, including `6` for a scenario or batch partial failure.
+
+Every target operation accepts exactly one of `--target <id-or-alias>` and
+`--descriptor <path>`, plus optional `--session` and `--correlation`. Successful and
+failed target responses preserve the protocol `operationId` and `correlationId`; failures
+that occur locally before target acceptance cannot have an operation ID. Discovery,
+schema, help, and local validation errors are CLI-local shapes rather than protocol
+responses.
+
+The direct `wpf.snapshot`, `wpf.wait`, `wpf.assert`, `wpf.screenshot`,
+`winforms.snapshot`, `winforms.wait`, `winforms.assert`, and
+`winforms.screenshot` commands are ergonomic translations to `invoke` with the matching
+registered operation. Scenario commands and `job.start` payloads apply the same
+translation when their operation is one of these adapter names. Adapter registrations
+return a scalar `JsonElement`, allowing the direct CLI command to place the structured
+adapter result directly in the protocol response before its ephemeral session closes.
+
+The agent-facing workflow and realistic request/response examples live in
+[`skills/scry/SKILL.md`](../skills/scry/SKILL.md). Keep that Skill and `scry schema`
+updated whenever the CLI contract changes.
 
 ## C# execution
 
@@ -246,11 +274,9 @@ Jobs execute an ordinary non-job protocol operation in the target process. `job.
 States are `queued`, `running`, `succeeded`, `failed`, and `canceled`. A wait timeout returns `{ "job": <current snapshot>, "timedOut": true }`; timeout is never represented as a job state. Cancellation is cooperative. Completed entries expire after `JobRetention`, and admission remains bounded by `MaximumJobs`. Logs are bounded per job and use monotonically increasing cursors. If requested entries have already rolled off, `truncated` is true and `oldestCursor` identifies the first retained entry.
 
 ```powershell
-scry jobs start --target my-test-target --correlation build-42 --json `
-  '{"operation":"invoke","payload":{"registeredOperation":"reindex","arguments":{}}}'
+scry jobs start --target my-test-target --correlation build-42 --request job-start.json
 
-scry jobs wait --target my-test-target --json `
-  '{"job":{"targetId":"...","sessionId":"...","jobId":"..."},"timeoutMilliseconds":30000}'
+scry jobs wait --target my-test-target --request job-wait.json
 ```
 
 ## Multi-target scenarios
@@ -307,4 +333,4 @@ The net472 suite executes an embedded endpoint on the installed desktop CLR and 
 - Add runtime adapters (WPF/WinForms) as registered roots/operations rather than coupling UI assemblies into the core.
 - Add Roslyn execution as an opt-in capability without coupling compiler services into the job/runtime layer.
 - Keep attach/injection responsible only for loading and bootstrapping the same runtime endpoint.
-- A future Skill should drive the stable CLI JSON surface rather than acquire in-process state.
+- The agent Skill drives the stable CLI JSON surface rather than acquiring in-process state.

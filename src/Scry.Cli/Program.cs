@@ -16,14 +16,32 @@ internal static class Cli
 
     public static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        if (args.Length == 0)
         {
-            WriteUsage();
-            return args.Length == 0 ? UsageError : Success;
+            CliContract.WriteHelp(null, Console.Error);
+            return UsageError;
         }
 
         try
         {
+            if (CliContract.TryGetHelpTopic(args, out var helpTopic))
+            {
+                CliContract.WriteHelp(helpTopic, Console.Out);
+                return Success;
+            }
+
+            if (args[0].Equals("schema", StringComparison.OrdinalIgnoreCase) ||
+                args[0] == "--json-schema")
+            {
+                if (args.Length != 1)
+                {
+                    throw new CliUsageException("The schema command does not accept options.");
+                }
+
+                CliContract.WriteSchema(Console.Out);
+                return Success;
+            }
+
             var (command, optionArguments) = ParseCommand(args);
             var options = ParseOptions(optionArguments);
             if (command == "discover")
@@ -38,11 +56,11 @@ internal static class Cli
 
             if (command is "scenario" or "batch")
             {
-                EnsureOnly(options, "input", "json");
+                EnsureOnly(options, "input", "request", "json");
                 return await ScenarioAsync(options).ConfigureAwait(false);
             }
 
-            if (!ProtocolConstants.CoreCapabilities.Contains(command, StringComparer.Ordinal))
+            if (!CliContract.IsEndpointOperation(command))
             {
                 throw new CliUsageException($"Unknown command '{command}'.");
             }
@@ -63,22 +81,24 @@ internal static class Cli
             sessionId ??= TryGetJobSession(payload);
             options.TryGetValue("correlation", out var correlationId);
             var persistentJobSession = command == "job.start";
+            var request = CliContract.PrepareRequest(command, payload);
             await using var client = await ScryClient.ConnectAsync(
                 descriptor,
                 sessionId,
                 clientName: "scry",
                 ephemeralSession: sessionId is null && !persistentJobSession).ConfigureAwait(false);
             var response = await client.RequestCorrelatedAsync(
-                command,
-                payload,
+                request.Operation,
+                request.Payload,
                 correlationId).ConfigureAwait(false);
+            response = CliContract.NormalizeResponse(command, response);
             WriteJson(response);
             return response.Success ? Success : OperationError;
         }
         catch (CliUsageException exception)
         {
             WriteError("usage_error", exception.Message);
-            WriteUsage();
+            Console.Error.WriteLine("Run 'scry --help' or 'scry help <command>' for usage.");
             return UsageError;
         }
         catch (Exception exception) when (
@@ -228,10 +248,12 @@ internal static class Cli
                 sessionId,
                 clientName: "scry-scenario",
                 ephemeralSession: sessionId is null && command.Operation != "job.start").ConfigureAwait(false);
+            var request = CliContract.PrepareRequest(command.Operation, command.Payload);
             var response = await client.RequestCorrelatedAsync(
-                command.Operation,
-                command.Payload,
+                request.Operation,
+                request.Payload,
                 command.CorrelationId).ConfigureAwait(false);
+            response = CliContract.NormalizeResponse(command.Operation, response);
             return new(
                 command.Id,
                 index,
@@ -464,28 +486,4 @@ internal static class Cli
     private static void WriteError(string code, string message) =>
         WriteJson(new { success = false, error = new { code, message } });
 
-    private static void WriteUsage()
-    {
-        Console.Error.WriteLine(
-            """
-            Usage:
-              scry discover
-              scry <capabilities|roots|inspect|get|set|invoke|enumerate|release|
-                    evaluate|execute|load-assembly|list-assemblies|find-types|describe-type>
-                   (--descriptor <path> | --target <id-or-alias>)
-                   [--session <id>] [--correlation <id>]
-                   [--request <file|-> | --input <file|-> | --source <file|-> | --json <object>]
-              scry jobs <start|status|wait|cancel|logs>
-                   (--descriptor <path> | --target <id-or-alias>)
-                   [--session <id>] [--correlation <id>] [--input <file|-> | --json <object>]
-              scry <scenario|batch> (--input <file|-> | --json <object>)
-
-            Job handles carry target and session identity; follow-up commands infer --session from the handle.
-            Scenario commands each select exactly one target ID/alias or descriptor path.
-            Capability tokens are read from local descriptor files and are never accepted as arguments.
-            Redirected stdin is C# source for evaluate/execute and request JSON for other operations.
-            """);
-    }
-
-    private sealed class CliUsageException(string message) : Exception(message);
 }

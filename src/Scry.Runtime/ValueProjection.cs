@@ -19,7 +19,7 @@ internal static class ValueProjection
         type == typeof(DateOnly) || type == typeof(TimeOnly) ||
         type == typeof(Half) || type == typeof(Int128) || type == typeof(UInt128) ||
 #endif
-        type == typeof(Uri);
+        type == typeof(Uri) || type == typeof(JsonElement);
 
     public static JsonElement Project(object value)
     {

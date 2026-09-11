@@ -4,6 +4,9 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Text.Json;
+using Scry.Contracts;
+using Scry.Sdk;
 
 namespace Scry.Wpf.Tests;
 
@@ -120,6 +123,33 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
         Assert.Equal("unsupported", result.Status);
         Assert.Equal("size_limit", result.ErrorCode);
         Assert.Contains("encoded screenshot", result.Message);
+    }
+
+    [Fact]
+    public async Task Registered_snapshot_returns_inline_structured_json()
+    {
+        await using var host = AgentHost.Start(
+            builder => builder.UseWpf(
+                fixture.Application,
+                adapter => adapter.RegisterWindow("main", fixture.MainWindow)));
+        await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
+
+        var response = await client.RequestAsync(
+            "invoke",
+            new
+            {
+                registeredOperation = "wpf.snapshot",
+                arguments = new { root = "main", tree = "visual" }
+            });
+
+        Assert.True(response.Success, response.Error?.Message);
+        var remoteValue = response.Result!.Value.GetProperty("value")
+            .Deserialize<RemoteValue>(ScryJson.Options)!;
+        Assert.Equal("scalar", remoteValue.Kind);
+        Assert.Equal(typeof(JsonElement).FullName, remoteValue.Type);
+        var snapshot = remoteValue.Value!.Value.Deserialize<WpfSnapshot>(ScryJson.Options)!;
+        Assert.Equal("visual", snapshot.TreeKind);
+        Assert.NotEmpty(snapshot.Roots);
     }
 
     private static IEnumerable<WpfNode> Flatten(IEnumerable<WpfNode> roots)
