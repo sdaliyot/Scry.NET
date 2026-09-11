@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Text.Json;
@@ -14,7 +15,10 @@ public static class WinFormsAgentBuilderExtensions
         Action<WinFormsAdapterBuilder>? configure = null,
         WinFormsAdapterOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(builder);
+        if (builder is null)
+        {
+            throw new ArgumentNullException(nameof(builder));
+        }
         var adapterBuilder = new WinFormsAdapterBuilder(dispatcherOwner, options);
         configure?.Invoke(adapterBuilder);
         var adapter = adapterBuilder.Build();
@@ -67,17 +71,22 @@ public sealed class WinFormsAdapterBuilder
                 nameof(name));
         }
 
-        ArgumentNullException.ThrowIfNull(control);
+        if (control is null)
+        {
+            throw new ArgumentNullException(nameof(control));
+        }
         if (!control.IsHandleCreated || control.InvokeRequired)
         {
             throw new ArgumentException(
                 "Registered roots must have a created handle on the dispatcher owner's UI thread.",
                 nameof(control));
         }
-        if (!_roots.TryAdd(name, control))
+        if (_roots.ContainsKey(name))
         {
             throw new ArgumentException($"A Windows Forms root named '{name}' is already registered.", nameof(name));
         }
+
+        _roots[name] = control;
 
         return this;
     }
@@ -134,7 +143,10 @@ public sealed class WinFormsAdapter
         TimeSpan? pollInterval = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(condition);
+        if (condition is null)
+        {
+            throw new ArgumentNullException(nameof(condition));
+        }
         var selectedTimeout = timeout ?? _options.DefaultWaitTimeout;
         var selectedPoll = pollInterval ?? _options.DefaultPollInterval;
         if (selectedTimeout < TimeSpan.Zero)
@@ -253,7 +265,7 @@ public sealed class WinFormsAdapter
     {
         var roots = _registeredRoots.ToList();
         var keys = new HashSet<string>(_registeredRoots.Keys, StringComparer.Ordinal);
-        var seen = new HashSet<Control>(_registeredRoots.Values, ReferenceEqualityComparer.Instance);
+        var seen = new HashSet<Control>(_registeredRoots.Values, ReferenceComparer<Control>.Instance);
         foreach (var form in Application.OpenForms.Cast<Form>())
         {
             if (form.InvokeRequired || !seen.Add(form))
@@ -586,7 +598,7 @@ public sealed class WinFormsAdapter
         }
 
         var milliseconds = value.GetDouble();
-        if (!double.IsFinite(milliseconds) || milliseconds < 0)
+        if ((double.IsNaN(milliseconds) || double.IsInfinity(milliseconds)) || milliseconds < 0)
         {
             throw new ArgumentOutOfRangeException(propertyName);
         }

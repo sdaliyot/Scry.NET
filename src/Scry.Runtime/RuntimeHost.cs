@@ -141,7 +141,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         }
 
         AppDomain.CurrentDomain.ProcessExit -= _processExitHandler;
-#if NET48
+#if NETFRAMEWORK
         _stopping.Cancel();
 #else
         await _stopping.CancelAsync().ConfigureAwait(false);
@@ -330,7 +330,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 var operationId = Guid.NewGuid().ToString("N");
                 var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId)
                     ? operationId
-                    : request.CorrelationId;
+                    : request.CorrelationId ?? operationId;
                 try
                 {
                     if (request.ProtocolVersion != ProtocolConstants.Version)
@@ -455,7 +455,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
     private NamedPipeServerStream CreatePipe()
     {
-#if NET48
+#if NETFRAMEWORK
         using var identity = WindowsIdentity.GetCurrent();
         var user = identity.User
             ?? throw new InvalidOperationException("The current Windows identity has no security identifier.");

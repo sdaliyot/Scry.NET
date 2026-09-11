@@ -201,7 +201,7 @@ public static class FrameCodec
 
         var header = new byte[sizeof(int)];
         BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
-#if NET48
+#if NETFRAMEWORK
         await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
         await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
 #else
@@ -216,7 +216,7 @@ public static class FrameCodec
         CancellationToken cancellationToken = default)
     {
         var header = new byte[sizeof(int)];
-#if NET48
+#if NETFRAMEWORK
         var first = await stream.ReadAsync(header, 0, 1, cancellationToken).ConfigureAwait(false);
 #else
         var first = await stream.ReadAsync(header.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
@@ -226,7 +226,7 @@ public static class FrameCodec
             return default;
         }
 
-#if NET48
+#if NETFRAMEWORK
         await ReadExactlyAsync(stream, header, 1, header.Length - 1, cancellationToken).ConfigureAwait(false);
 #else
         await ReadExactlyAsync(stream, header.AsMemory(1), cancellationToken).ConfigureAwait(false);
@@ -238,7 +238,7 @@ public static class FrameCodec
         }
 
         var payload = new byte[length];
-#if NET48
+#if NETFRAMEWORK
         await ReadExactlyAsync(stream, payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
 #else
         await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false);
@@ -247,7 +247,7 @@ public static class FrameCodec
             ?? throw new ProtocolException($"Frame did not contain a {typeof(T).Name}.");
     }
 
-#if NET48
+#if NETFRAMEWORK
     private static async ValueTask ReadExactlyAsync(
         Stream stream,
         byte[] buffer,

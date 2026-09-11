@@ -50,7 +50,7 @@ public sealed class AgentHostOptions
 
     private static string DefaultAlias()
     {
-#if NET48
+#if NETFRAMEWORK
         return Path.GetFileNameWithoutExtension(AppDomain.CurrentDomain.FriendlyName);
 #else
         return Environment.ProcessPath is { } path

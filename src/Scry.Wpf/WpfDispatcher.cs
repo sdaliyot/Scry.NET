@@ -18,7 +18,10 @@ public sealed class WpfDispatcher
         Func<T> callback,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+        {
+            throw new ArgumentNullException(nameof(callback));
+        }
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfUnavailable();
 
@@ -51,7 +54,10 @@ public sealed class WpfDispatcher
         Action callback,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+        {
+            throw new ArgumentNullException(nameof(callback));
+        }
         await InvokeAsync(
             () =>
             {

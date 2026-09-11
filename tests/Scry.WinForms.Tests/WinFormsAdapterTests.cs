@@ -175,7 +175,12 @@ public sealed class WinFormsAdapterTests
             thread.SetApartmentState(ApartmentState.STA);
             thread.IsBackground = true;
             thread.Start();
-            return await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromSeconds(5))) != completion.Task)
+            {
+                throw new TimeoutException("The Windows Forms fixture did not start within 5 seconds.");
+            }
+
+            return await completion.Task;
         }
 
         public async ValueTask DisposeAsync()

@@ -48,7 +48,7 @@ public sealed class ScryClient : IAsyncDisposable
         timeoutSource.CancelAfter(timeout ?? TimeSpan.FromSeconds(10));
         try
         {
-#if NET48
+#if NETFRAMEWORK
             await pipe.ConnectAsync(Timeout.Infinite, timeoutSource.Token).ConfigureAwait(false);
 #else
             await pipe.ConnectAsync(timeoutSource.Token).ConfigureAwait(false);
@@ -256,7 +256,7 @@ public sealed class ScryClient : IAsyncDisposable
 
     private static ValueTask DisposePipeAsync(NamedPipeClientStream pipe)
     {
-#if NET48
+#if NETFRAMEWORK
         pipe.Dispose();
         return default;
 #else

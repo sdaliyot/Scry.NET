@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Reflection;
-using System.Security.Cryptography;
 using System.Text.Json;
 using Scry.Contracts;
 
@@ -97,10 +96,10 @@ internal sealed class JobManager : IDisposable
                     $"The target's limit of {_maximumJobs} retained or active jobs has been reached.");
             }
 
-            var jobId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+            var jobId = RuntimeCompatibility.CreateRandomHex(16);
             var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId)
                 ? requestCorrelationId
-                : request.CorrelationId;
+                : request.CorrelationId ?? requestCorrelationId;
             var lease = session.EnterOperation(renewLeaseOnExit: false);
             entry = new(
                 new(_targetId, session.Id, jobId),
@@ -142,7 +141,8 @@ internal sealed class JobManager : IDisposable
         {
             try
             {
-                await entry.Completion.WaitAsync(
+                await RuntimeCompatibility.AwaitWithTimeoutAsync(
+                    entry.Completion,
                     TimeSpan.FromMilliseconds(request.TimeoutMilliseconds),
                     cancellationToken).ConfigureAwait(false);
             }
@@ -337,7 +337,7 @@ internal sealed class JobEntry : IDisposable
 {
     private readonly object _gate = new();
     private readonly CancellationTokenSource _cancellation = new();
-    private readonly TaskCompletionSource _completion =
+    private readonly TaskCompletionSource<object?> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Queue<JobLogEntry> _logs = new();
     private readonly IDisposable _sessionLease;
@@ -500,7 +500,7 @@ internal sealed class JobEntry : IDisposable
                 usedBytes += entryBytes;
             }
 
-            var nextCursor = entries.Count == 0 ? effectiveCursor : entries[^1].Cursor + 1;
+            var nextCursor = entries.Count == 0 ? effectiveCursor : entries[entries.Count - 1].Cursor + 1;
             return new(
                 Handle,
                 cursor,
@@ -530,16 +530,16 @@ internal sealed class JobEntry : IDisposable
             _error = error;
             _completedAt = DateTimeOffset.UtcNow;
             AddLogCore(state == JobStates.Failed ? "error" : "information", logMessage);
-            _completion.TrySetResult();
+            _completion.TrySetResult(null);
         }
     }
 
     private void AddLogCore(string level, string message)
     {
-        var boundedLevel = level.Length <= 64 ? level : level[..64];
+        var boundedLevel = level.Length <= 64 ? level : level.Substring(0, 64);
         var bounded = message.Length <= _maximumLogMessageLength
             ? message
-            : message[.._maximumLogMessageLength];
+            : message.Substring(0, _maximumLogMessageLength);
         _logs.Enqueue(new(_nextCursor++, DateTimeOffset.UtcNow, boundedLevel, bounded));
         while (_logs.Count > _maximumLogEntries)
         {

@@ -107,7 +107,7 @@ public sealed class ProtocolTests
             CancellationToken cancellationToken) =>
             _inner.ReadAsync(buffer, offset, Math.Min(count, _maximumRead), cancellationToken);
 
-#if !NET48
+#if !NETFRAMEWORK
         public override ValueTask<int> ReadAsync(
             Memory<byte> buffer,
             CancellationToken cancellationToken = default) =>

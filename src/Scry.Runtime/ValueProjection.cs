@@ -15,8 +15,10 @@ internal static class ValueProjection
         type == typeof(string) || type == typeof(decimal) ||
         type == typeof(Guid) || type == typeof(DateTime) ||
         type == typeof(DateTimeOffset) || type == typeof(TimeSpan) ||
+#if !NETFRAMEWORK
         type == typeof(DateOnly) || type == typeof(TimeOnly) ||
         type == typeof(Half) || type == typeof(Int128) || type == typeof(UInt128) ||
+#endif
         type == typeof(Uri);
 
     public static JsonElement Project(object value)
@@ -111,7 +113,7 @@ internal static class ValueProjection
 
         private object? ProjectMember(MemberInfo member, object value, int depth)
         {
-            if (member is PropertyInfo { PropertyType.IsByRefLike: true } byRefProperty)
+            if (member is PropertyInfo byRefProperty && byRefProperty.PropertyType.IsByRefLikeCompatible())
             {
                 return Error(
                     new NotSupportedException(
@@ -158,7 +160,7 @@ internal static class ValueProjection
         private static string Truncate(string value) =>
             value.Length <= MaximumStringLength
                 ? value
-                : value[..MaximumStringLength];
+                : value.Substring(0, MaximumStringLength);
 
         private static object ProjectText(string value) =>
             value.Length <= MaximumStringLength

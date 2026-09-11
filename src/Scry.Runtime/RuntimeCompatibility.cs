@@ -60,8 +60,54 @@ internal static class RuntimeCompatibility
         await task.ConfigureAwait(false);
     }
 
+    public static async Task AwaitWithTimeoutAsync(Task task, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        if (task.IsCompleted)
+        {
+            await task.ConfigureAwait(false);
+            return;
+        }
+
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var delay = Task.Delay(timeout, linkedCancellation.Token);
+        if (await Task.WhenAny(task, delay).ConfigureAwait(false) == task)
+        {
+            linkedCancellation.Cancel();
+            await task.ConfigureAwait(false);
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new TimeoutException();
+    }
+
+    public static async Task<T> AwaitWithTimeoutAsync<T>(Task<T> task, TimeSpan timeout)
+    {
+        if (task.IsCompleted)
+        {
+            return await task.ConfigureAwait(false);
+        }
+
+        if (await Task.WhenAny(task, Task.Delay(timeout)).ConfigureAwait(false) != task)
+        {
+            throw new TimeoutException();
+        }
+
+        return await task.ConfigureAwait(false);
+    }
+
     public static IEqualityComparer<object> ReferenceComparer { get; } =
         new ObjectReferenceComparer();
+
+    public static bool IsByRefLikeCompatible(this Type type)
+    {
+#if NETFRAMEWORK
+        return type.GetCustomAttributesData()
+            .Any(data => data.AttributeType.FullName == "System.Runtime.CompilerServices.IsByRefLikeAttribute");
+#else
+        return type.IsByRefLike;
+#endif
+    }
 
     private sealed class ObjectReferenceComparer : IEqualityComparer<object>
     {

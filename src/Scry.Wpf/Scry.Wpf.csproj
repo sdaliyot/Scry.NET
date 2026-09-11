@@ -5,15 +5,34 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net9.0-windows</TargetFramework>
-    <UseWPF>true</UseWPF>
+    <TargetFrameworks>$(ScryDesktopTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.Wpf</PackageId>
     <Description>Optional WPF inspection adapter for Scry.NET.</Description>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
+  <!-- UseWPF is a .NET Core 3.0+ concept backed by the Microsoft.WindowsDesktop.App.WPF framework
+       reference, which has no .NETFramework equivalent. Scoping it to the modern target keeps the
+       two legs from ever both contributing WPF references. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == '$(ScryModernWindowsTargetFramework)'">
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <!-- The desktop CLR gets the same assemblies by simple name. Resolved from
+       Microsoft.NETFramework.ReferenceAssemblies (see Directory.Build.props), so the build stays
+       independent of machine-installed targeting packs. AutomationProperties lives in
+       PresentationCore, so UIAutomationTypes/UIAutomationProvider are not needed. -->
+  <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System.Xaml" />
+    <PackageReference Include="System.Text.Json" Version="$(SystemTextJsonVersion)" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="$(BclAsyncInterfacesVersion)" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="$(TasksExtensionsVersion)" />
+  </ItemGroup>
+
   <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <Compile Include="..\Shared\ReferenceComparer.cs" Link="Compatibility\ReferenceComparer.cs" />
   </ItemGroup>
 
 </Project>

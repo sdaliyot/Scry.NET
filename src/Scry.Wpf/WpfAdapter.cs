@@ -24,7 +24,10 @@ public static class WpfAgentBuilderExtensions
         Action<WpfAdapterBuilder>? configure = null,
         WpfAdapterOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(builder);
+        if (builder is null)
+        {
+            throw new ArgumentNullException(nameof(builder));
+        }
         var adapterBuilder = new WpfAdapterBuilder(dispatcher, options);
         configure?.Invoke(adapterBuilder);
         Register(builder, adapterBuilder.Build());
@@ -37,7 +40,10 @@ public static class WpfAgentBuilderExtensions
         Action<WpfAdapterBuilder>? configure = null,
         WpfAdapterOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(builder);
+        if (builder is null)
+        {
+            throw new ArgumentNullException(nameof(builder));
+        }
         var adapterBuilder = new WpfAdapterBuilder(application, options);
         configure?.Invoke(adapterBuilder);
         Register(builder, adapterBuilder.Build());
@@ -92,7 +98,10 @@ public sealed class WpfAdapterBuilder
 
     public WpfAdapterBuilder IncludeApplication(Application application)
     {
-        ArgumentNullException.ThrowIfNull(application);
+        if (application is null)
+        {
+            throw new ArgumentNullException(nameof(application));
+        }
         EnsureDispatcher(application.Dispatcher, nameof(application));
         _application = application;
         return this;
@@ -101,16 +110,21 @@ public sealed class WpfAdapterBuilder
     public WpfAdapterBuilder RegisterRoot(string name, DependencyObject root)
     {
         ValidateName(name);
-        ArgumentNullException.ThrowIfNull(root);
+        if (root is null)
+        {
+            throw new ArgumentNullException(nameof(root));
+        }
         if (root is DispatcherObject dispatcherObject)
         {
             EnsureDispatcher(dispatcherObject.Dispatcher, nameof(root));
         }
 
-        if (!_roots.TryAdd(name, root))
+        if (_roots.ContainsKey(name))
         {
             throw new ArgumentException($"A WPF root named '{name}' is already registered.", nameof(name));
         }
+
+        _roots[name] = root;
 
         return this;
     }
@@ -232,7 +246,10 @@ public sealed class WpfAdapter
         TimeSpan? pollInterval = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(condition);
+        if (condition is null)
+        {
+            throw new ArgumentNullException(nameof(condition));
+        }
         var selectedTimeout = timeout ?? _options.DefaultWaitTimeout;
         var selectedPoll = pollInterval ?? _options.DefaultPollInterval;
         if (selectedTimeout < TimeSpan.Zero)
@@ -267,7 +284,10 @@ public sealed class WpfAdapter
         WpfCondition condition,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(condition);
+        if (condition is null)
+        {
+            throw new ArgumentNullException(nameof(condition));
+        }
         var result = await _dispatcher.InvokeAsync(
             () => Evaluate(condition, CreateSnapshot(condition.TreeKind, condition.Root)),
             cancellationToken).ConfigureAwait(false);
@@ -373,7 +393,7 @@ public sealed class WpfAdapter
             .ToList();
         var seen = new HashSet<DependencyObject>(
             roots.Select(item => item.Value),
-            ReferenceEqualityComparer.Instance);
+            ReferenceComparer<DependencyObject>.Instance);
 
         if (_application is not null)
         {
@@ -655,8 +675,8 @@ public sealed class WpfAdapter
                 "The selected element is not loaded into a presentation source.");
         }
 
-        if (!double.IsFinite(element.ActualWidth) ||
-            !double.IsFinite(element.ActualHeight))
+        if ((double.IsNaN(element.ActualWidth) || double.IsInfinity(element.ActualWidth)) ||
+            (double.IsNaN(element.ActualHeight) || double.IsInfinity(element.ActualHeight)))
         {
             return ScreenshotFailure(
                 "unsupported",
@@ -918,7 +938,7 @@ public sealed class WpfAdapter
     private string Limit(string value) =>
         value.Length <= _options.MaximumPreviewLength
             ? value
-            : $"{value[.._options.MaximumPreviewLength]}…";
+            : $"{value.Substring(0, _options.MaximumPreviewLength)}…";
 
     private static WpfScreenshotResult ScreenshotFailure(
         string status,
@@ -979,7 +999,7 @@ public sealed class WpfAdapter
 
         if (value.ValueKind != JsonValueKind.Number ||
             !value.TryGetDouble(out var milliseconds) ||
-            !double.IsFinite(milliseconds) ||
+            (double.IsNaN(milliseconds) || double.IsInfinity(milliseconds)) ||
             milliseconds < 0 ||
             (!allowZero && milliseconds == 0))
         {

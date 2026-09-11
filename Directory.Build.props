@@ -6,8 +6,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
     <ScryModernTargetFramework>net9.0</ScryModernTargetFramework>
-    <ScryNetFrameworkTarget>net48</ScryNetFrameworkTarget>
+    <ScryModernWindowsTargetFramework>net9.0-windows</ScryModernWindowsTargetFramework>
+    <ScryNetFrameworkTarget>net472</ScryNetFrameworkTarget>
     <ScryLibraryTargetFrameworks>$(ScryModernTargetFramework);$(ScryNetFrameworkTarget)</ScryLibraryTargetFrameworks>
+    <ScryDesktopTargetFrameworks>$(ScryModernWindowsTargetFramework);$(ScryNetFrameworkTarget)</ScryDesktopTargetFrameworks>
     <SystemTextJsonVersion>9.0.11</SystemTextJsonVersion>
     <BclAsyncInterfacesVersion>9.0.11</BclAsyncInterfacesVersion>
     <TasksExtensionsVersion>4.5.4</TasksExtensionsVersion>
@@ -23,10 +25,11 @@
   <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
     <Compile Include="$(MSBuildThisFileDirectory)src\Shared\NetFrameworkCompatibility.cs"
              Link="Compatibility\NetFrameworkCompatibility.cs" />
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48"
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472"
                       Version="$(NetFrameworkReferenceAssembliesVersion)"
                       PrivateAssets="all" />
   </ItemGroup>
+
 
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)README.md"

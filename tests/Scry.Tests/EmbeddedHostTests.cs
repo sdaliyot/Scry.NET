@@ -41,7 +41,7 @@ public sealed class EmbeddedHostTests
             item => item.Descriptor.Target.TargetId == targetId);
     }
 
-#if NET48
+#if NETFRAMEWORK
     [Fact]
     public async Task Net48_embedded_host_runs_protocol_reflection_and_roslyn_in_the_default_appdomain()
     {
@@ -614,7 +614,7 @@ public sealed class EmbeddedHostTests
             typeof(TestState).FullName!,
             typeof(EmbeddedHostTests).Assembly.GetName().Name));
         Assert.Equal(typeof(TestState).FullName, description.Type.FullName);
-#if NET48
+#if NETFRAMEWORK
         Assert.Equal("DefaultAppDomain", description.Type.LoadContext);
 #else
         Assert.Equal("Default", description.Type.LoadContext);
@@ -627,7 +627,7 @@ public sealed class EmbeddedHostTests
         Assert.True(defaultLoaded.Assembly.IsDefaultLoadContext);
         Assert.False(defaultLoaded.Assembly.IsCollectible);
 
-#if NET48
+#if NETFRAMEWORK
         var isolated = await client.RequestAsync(
             "load-assembly",
             new LoadAssemblyRequest(typeof(ExternalReference).Assembly.Location, "isolated"));

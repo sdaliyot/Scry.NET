@@ -5,15 +5,26 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net9.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFrameworks>$(ScryDesktopTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.WinForms</PackageId>
     <Description>Optional Windows Forms inspection adapter for Scry.NET.</Description>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
+  <!-- See Scry.Wpf.csproj: UseWindowsForms is modern-only, the desktop CLR uses plain references. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == '$(ScryModernWindowsTargetFramework)'">
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <PackageReference Include="System.Text.Json" Version="$(SystemTextJsonVersion)" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="$(BclAsyncInterfacesVersion)" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="$(TasksExtensionsVersion)" />
+  </ItemGroup>
+
   <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <Compile Include="..\Shared\ReferenceComparer.cs" Link="Compatibility\ReferenceComparer.cs" />
   </ItemGroup>
 
 </Project>

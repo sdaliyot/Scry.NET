@@ -11,20 +11,22 @@ The endpoint supports non-UI processes as a first-class scenario. The core packa
 
 | Component | Supported targets |
 |---|---|
-| `Scry.Contracts`, `Scry.Runtime`, `Scry.Sdk` | .NET 9 and .NET Framework 4.8 |
-| `Scry.SampleHost` | .NET 9 and .NET Framework 4.8 |
+| `Scry.Contracts`, `Scry.Runtime`, `Scry.Sdk` | .NET 9 and .NET Framework 4.7.2 |
+| `Scry.SampleHost` | .NET 9 and .NET Framework 4.7.2 |
 | `Scry.Cli` | .NET 9 only; it can connect to either runtime |
-| `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) only |
+| `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) and .NET Framework 4.7.2 |
 
-Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only developer/test tooling**, not a remote administration service. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.8 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
+Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only developer/test tooling**, not a remote administration service. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
 
 Build and test:
 
 ```powershell
 dotnet build Scry.sln
 dotnet test Scry.sln --no-build
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net48 --artifacts-path artifacts\net48-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net48 --artifacts-path artifacts\net48-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
+dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
 ```
 
 Run `dotnet run --project samples\Scry.SampleHost`, then use the emitted descriptor path:

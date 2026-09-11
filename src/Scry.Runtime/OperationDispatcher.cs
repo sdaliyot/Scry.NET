@@ -262,7 +262,7 @@ internal sealed class OperationDispatcher(
         var result = selected.Method.Invoke(subject, selected.Arguments);
         if (result is Task task)
         {
-            await RuntimeCompatibility.AwaitWithCancellationAsync(task, cancellationToken).ConfigureAwait(false);
+            await RuntimeCompatibility.AwaitWithCancellationAsync(task, context.CancellationToken).ConfigureAwait(false);
             result = task.GetType().IsGenericType
                 ? task.GetType().GetProperty("Result")!.GetValue(task)
                 : null;
@@ -277,7 +277,7 @@ internal sealed class OperationDispatcher(
             result.GetType().GetGenericTypeDefinition() == typeof(ValueTask<>))
         {
             var valueTaskAsTask = (Task)result.GetType().GetMethod("AsTask")!.Invoke(result, null)!;
-            await RuntimeCompatibility.AwaitWithCancellationAsync(valueTaskAsTask, cancellationToken)
+            await RuntimeCompatibility.AwaitWithCancellationAsync(valueTaskAsTask, context.CancellationToken)
                 .ConfigureAwait(false);
             result = valueTaskAsTask.GetType().GetProperty("Result")!.GetValue(valueTaskAsTask);
         }

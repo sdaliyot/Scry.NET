@@ -19,20 +19,24 @@ Target names and compatibility package versions are centralized in `Directory.Bu
 
 | Project | Target frameworks | Notes |
 |---|---|---|
-| `Scry.Contracts` | `net9.0`, `net48` | Identical protocol and descriptor shape |
-| `Scry.Runtime` | `net9.0`, `net48` | CoreCLR load contexts or desktop CLR default-AppDomain behavior |
-| `Scry.Sdk` | `net9.0`, `net48` | Embedded host and client |
-| `Scry.SampleHost` | `net9.0`, `net48` | Non-UI embedded sample |
-| `Scry.Tests` | `net9.0`, `net48` | Runtime integration suite; CLI tests run on `net9.0` |
+| `Scry.Contracts` | `net9.0`, `net472` | Identical protocol and descriptor shape |
+| `Scry.Runtime` | `net9.0`, `net472` | CoreCLR load contexts or desktop CLR default-AppDomain behavior |
+| `Scry.Sdk` | `net9.0`, `net472` | Embedded host and client |
+| `Scry.SampleHost` | `net9.0`, `net472` | Non-UI embedded sample |
+| `Scry.Tests` | `net9.0`, `net472` | Runtime integration suite; CLI tests run on `net9.0` |
+| `Scry.Wpf` | `net9.0-windows`, `net472` | Optional WPF adapter; desktop CLR uses direct assembly references |
+| `Scry.WinForms` | `net9.0-windows`, `net472` | Optional Windows Forms adapter; desktop CLR uses direct assembly references |
+| `Scry.Wpf.Tests` | `net9.0-windows`, `net472` | STA dispatcher tests, both runtimes |
+| `Scry.WinForms.Tests` | `net9.0-windows`, `net472` | STA message-loop tests, both runtimes |
 | `Scry.Cli` | `net9.0` | Modern-only executable that interoperates with both host targets |
 
-The `Microsoft.NETFramework.ReferenceAssemblies.net48` package makes SDK-style net48 builds independent of machine-installed targeting packs. Runtime validation still requires Windows with .NET Framework 4.8 installed.
+The `Microsoft.NETFramework.ReferenceAssemblies.net472` package makes SDK-style net472 builds independent of machine-installed targeting packs. Runtime validation still requires Windows with .NET Framework 4.7.2 installed.
 
 ## Protocol and security
 
 Frames are a 4-byte little-endian length followed by UTF-8 JSON. Protocol version 1 requires `handshake` first. The handshake authenticates a 256-bit random capability token, negotiates the version, creates or resumes a target-qualified session, and returns capabilities. Subsequent requests use structured success/error envelopes. Every handled request receives a target-generated `operationId`; a supplied `correlationId` is echoed, or defaults to that operation ID. Ordinary operation exceptions cross the boundary with type, message, stack, HResult, source, and recursively captured inner exceptions. Fatal runtime failures such as process termination, stack overflow, corrupted state, or fail-fast can bypass this boundary.
 
-Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. On .NET 9 the named pipe uses `PipeOptions.CurrentUserOnly`. On .NET Framework 4.8 the server creates a protected, non-inheriting DACL with an allow rule only for the current Windows user SID; it does not fall back to a broadly accessible pipe. Descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
+Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. On .NET 9 the named pipe uses `PipeOptions.CurrentUserOnly`. On .NET Framework 4.7.2 the server creates a protected, non-inheriting DACL with an allow rule only for the current Windows user SID; it does not fall back to a broadly accessible pipe. Descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
 
 Sessions belong to one target. Object references contain target, session, and handle IDs, preventing accidental cross-target/session use. Handles are strong references with sliding leases, stable identity within a session, explicit release, and cleanup on expiry/session disposal. Previews are bounded and are not object serialization.
 
@@ -143,7 +147,7 @@ Host defaults are configurable through `AgentHostOptions`: source length, defaul
 `load-assembly` requires an absolute path. Loading differs by runtime:
 
 - On .NET 9, `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains isolated contexts for the host lifetime; there is no unload operation in this release. Isolated assemblies are available to list/find/describe operations but are intentionally excluded from Roslyn references.
-- On .NET Framework 4.8, only `AppDomain.CurrentDomain` is supported. `default` uses `Assembly.LoadFrom` in that AppDomain, and descriptions report `DefaultAppDomain`. `isolated` fails with `load_policy_not_supported`: a child AppDomain cannot preserve Scry's in-process roots, handles, reflection objects, and Roslyn type identity.
+- On .NET Framework 4.7.2, only `AppDomain.CurrentDomain` is supported. `default` uses `Assembly.LoadFrom` in that AppDomain, and descriptions report `DefaultAppDomain`. `isolated` fails with `load_policy_not_supported`: a child AppDomain cannot preserve Scry's in-process roots, handles, reflection objects, and Roslyn type identity.
 
 Loading is explicit: evaluation never loads assemblies by path or probes arbitrary directories. `list-assemblies` reports identity, location, dynamic status, load context, default-context status, and collectibility. `find-types` performs bounded filtering over loaded types and reports each type's load context. `describe-type` returns bounded member metadata; `assembly` and `loadContext` selectors disambiguate duplicate full type names across assemblies or contexts.
 
@@ -191,7 +195,7 @@ scry jobs wait --target my-test-target --json `
 
 Scenario output is a `ScenarioResult` containing `protocolVersion`, normalized `mode`, aggregate `success`, and ordered `results`. Every item preserves its command ID, index, operation, selector, resolved target metadata when available, and either the target's `ProtocolResponse` or a CLI-side `ProtocolError`. A scenario exits `0` only when every command succeeds and `6` when any command fails; individual commands retain the existing exit codes.
 
-Generated Roslyn script assemblies and assemblies loaded into the .NET Framework default AppDomain cannot be unloaded independently. They remain until the host process exits. Scry does not create, marshal across, or unload child AppDomains in the net48 implementation.
+Generated Roslyn script assemblies and assemblies loaded into the .NET Framework default AppDomain cannot be unloaded independently. They remain until the host process exits. Scry does not create, marshal across, or unload child AppDomains in the net472 implementation.
 
 ## Validation
 
@@ -200,12 +204,14 @@ Run the modern and desktop CLR suites explicitly:
 ```powershell
 dotnet build Scry.sln -c Release
 dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net9.0 --no-build
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net48 --artifacts-path artifacts\net48-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net48 --artifacts-path artifacts\net48-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
+dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
 dotnet format Scry.sln --verify-no-changes --no-restore
 ```
 
-The net48 suite executes an embedded endpoint on the installed desktop CLR and covers framing (including partial and truncated reads), discovery, current-user pipe ACLs, capability authentication, sessions and handles, reflection, exception projection, limits, Roslyn evaluate/execute, assembly discovery/loading, and the unsupported isolated-policy response. The architecture-specific runs assert that the test host is actually x64 or x86.
+The net472 suite executes an embedded endpoint on the installed desktop CLR and covers framing (including partial and truncated reads), discovery, current-user pipe ACLs, capability authentication, sessions and handles, reflection, exception projection, limits, Roslyn evaluate/execute, assembly discovery/loading, and the unsupported isolated-policy response. The architecture-specific runs assert that the test host is actually x64 or x86.
 
 ## Extensibility boundaries
 

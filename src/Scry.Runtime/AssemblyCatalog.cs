@@ -1,5 +1,5 @@
 using System.Reflection;
-#if !NET48
+#if !NETFRAMEWORK
 using System.Runtime.Loader;
 #endif
 using Microsoft.CodeAnalysis;
@@ -10,7 +10,7 @@ namespace Scry.Runtime;
 internal sealed class AssemblyCatalog
 {
     private readonly object _gate = new();
-#if !NET48
+#if !NETFRAMEWORK
     private readonly List<AssemblyLoadContext> _retainedContexts = [];
 #endif
     private readonly RuntimeHostOptions _options;
@@ -242,7 +242,7 @@ internal sealed class AssemblyCatalog
         var existing = LoadedAssemblies().FirstOrDefault(assembly =>
             IsDefaultContext(assembly) &&
             string.Equals(TryGetLocation(assembly), path, StringComparison.OrdinalIgnoreCase));
-#if NET48
+#if NETFRAMEWORK
         return existing ?? Assembly.LoadFrom(path);
 #else
         return existing ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
@@ -251,7 +251,7 @@ internal sealed class AssemblyCatalog
 
     private Assembly LoadIsolated(string path)
     {
-#if NET48
+#if NETFRAMEWORK
         throw new ScryOperationException(
             "load_policy_not_supported",
             "The isolated load policy is unavailable on .NET Framework 4.8; only the default AppDomain is supported.");
@@ -320,7 +320,7 @@ internal sealed class AssemblyCatalog
 
     private static AssemblyDescription Describe(Assembly assembly)
     {
-#if NET48
+#if NETFRAMEWORK
         var name = assembly.GetName();
         return new(
             name.Name ?? assembly.FullName ?? "<unknown>",
@@ -440,7 +440,7 @@ internal sealed class AssemblyCatalog
 
     private static string ContextName(Assembly assembly)
     {
-#if NET48
+#if NETFRAMEWORK
         return "DefaultAppDomain";
 #else
         var context = AssemblyLoadContext.GetLoadContext(assembly);
@@ -448,7 +448,7 @@ internal sealed class AssemblyCatalog
 #endif
     }
 
-#if !NET48
+#if !NETFRAMEWORK
     private sealed class IsolatedAssemblyLoadContext : AssemblyLoadContext
     {
         private readonly AssemblyDependencyResolver _resolver;
@@ -475,7 +475,7 @@ internal sealed class AssemblyCatalog
 
     private static bool IsFullyQualifiedPath(string path)
     {
-#if NET48
+#if NETFRAMEWORK
         return path.StartsWith(@"\\", StringComparison.Ordinal) ||
             (path.Length >= 3 &&
              char.IsLetter(path[0]) &&
@@ -488,7 +488,7 @@ internal sealed class AssemblyCatalog
 
     private static bool IsDefaultContext(Assembly assembly)
     {
-#if NET48
+#if NETFRAMEWORK
         _ = assembly;
         return true;
 #else

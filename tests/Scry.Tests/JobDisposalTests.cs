@@ -66,7 +66,7 @@ public sealed class JobDisposalTests
         // full duration.
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(12), $"Dispose took {stopwatch.Elapsed}.");
 
-        var captured = await signal.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        var captured = await RuntimeCompatibility.AwaitWithTimeoutAsync(signal.Task, TimeSpan.FromSeconds(15));
         Assert.Null(captured);
     }
 

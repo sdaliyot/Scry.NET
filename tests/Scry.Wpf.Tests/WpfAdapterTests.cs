@@ -149,7 +149,7 @@ public sealed class WpfFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _thread = new Thread(() =>
         {
             try
@@ -194,7 +194,7 @@ public sealed class WpfFixture : IAsyncLifetime
                     .Build();
                 MainWindow.Show();
                 secondary.Show();
-                completion.SetResult();
+                completion.SetResult(true);
                 Application.Run();
             }
             catch (Exception exception)
@@ -208,7 +208,12 @@ public sealed class WpfFixture : IAsyncLifetime
         };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        if (await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromSeconds(10))) != completion.Task)
+        {
+            throw new TimeoutException("The WPF fixture did not start within 10 seconds.");
+        }
+
+        await completion.Task;
     }
 
     public async Task DisposeAsync()

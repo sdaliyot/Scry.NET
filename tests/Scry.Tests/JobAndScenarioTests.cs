@@ -79,7 +79,7 @@ public sealed class JobAndScenarioTests
         Assert.True(logResult.OldestCursor > 0);
         Assert.InRange(logResult.Entries.Count, 1, 3);
         Assert.Equal(
-            logResult.Entries[^1].Cursor + 1,
+            logResult.Entries[logResult.Entries.Count - 1].Cursor + 1,
             logResult.NextCursor);
 
         await Task.Delay(250);
@@ -260,6 +260,7 @@ public sealed class JobAndScenarioTests
     }
 #endif
 
+#if NET9_0_OR_GREATER
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -317,6 +318,7 @@ public sealed class JobAndScenarioTests
     }
 
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+#endif
 
     private sealed class JobTestHost : IAsyncDisposable
     {
@@ -364,6 +366,7 @@ public sealed class JobAndScenarioTests
         public ValueTask DisposeAsync() => Host.DisposeAsync();
     }
 
+#if NET9_0_OR_GREATER
     private sealed class SampleProcess : IAsyncDisposable
     {
         private readonly Process _process;
@@ -446,4 +449,5 @@ public sealed class JobAndScenarioTests
             Assert.False(File.Exists(DescriptorPath));
         }
     }
+#endif
 }

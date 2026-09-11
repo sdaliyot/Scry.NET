@@ -8,7 +8,10 @@ public sealed class WinFormsDispatcher
 
     public WinFormsDispatcher(Control owner)
     {
-        ArgumentNullException.ThrowIfNull(owner);
+        if (owner is null)
+        {
+            throw new ArgumentNullException(nameof(owner));
+        }
         if (owner.IsDisposed || owner.Disposing)
         {
             throw new ObjectDisposedException(owner.GetType().FullName);
@@ -29,7 +32,10 @@ public sealed class WinFormsDispatcher
 
     public Task<T> InvokeAsync<T>(Func<T> callback, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+        {
+            throw new ArgumentNullException(nameof(callback));
+        }
         cancellationToken.ThrowIfCancellationRequested();
 
         if (_owner.IsDisposed || _owner.Disposing)
