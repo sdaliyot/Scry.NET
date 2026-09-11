@@ -226,6 +226,59 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
         Assert.True(response.Result!.Value.GetProperty("satisfied").GetBoolean());
     }
 
+    /// <summary>
+    /// A real application's window is far deeper than the toy trees the rest of this fixture uses -
+    /// the first one this was tried against measured 114 visual levels. The adapter caps projection
+    /// at 32, but a projection nests two JSON levels per tree level (a children array plus a node
+    /// object), so 32 levels alone reached System.Text.Json's default MaxDepth of 64 and the
+    /// snapshot failed with a misleading "possible object cycle" error. Guards the raised
+    /// ScryJson.MaximumJsonDepth.
+    /// </summary>
+    [Fact]
+    public async Task Registered_snapshot_survives_a_tree_deeper_than_the_projection_cap()
+    {
+        const int depth = 60;
+        var deepRoot = await fixture.Dispatcher.InvokeAsync(() =>
+        {
+            var root = new Border();
+            var current = (Decorator)root;
+            for (var level = 0; level < depth; level++)
+            {
+                var child = new Border();
+                current.Child = child;
+                current = child;
+            }
+
+            current.Child = new TextBlock { Text = "bottom" };
+            return root;
+        });
+
+        await using var host = AgentHost.Start(
+            builder => builder.UseWpf(
+                fixture.Application,
+                adapter => adapter.RegisterRoot("deep", deepRoot)));
+        await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
+
+        var response = await client.RequestAsync(
+            "invoke",
+            new
+            {
+                registeredOperation = "wpf.snapshot",
+                arguments = new { root = "deep", tree = "visual" }
+            });
+
+        Assert.True(response.Success, response.Error?.Message);
+        var snapshot = response.Result!.Value.GetProperty("value")
+            .Deserialize<RemoteValue>(ScryJson.Options)!
+            .Value!.Value
+            .Deserialize<WpfSnapshot>(ScryJson.Options)!;
+
+        // Truncated by the adapter's own depth budget, which is the bound that should apply -
+        // rather than failing outright in the serializer.
+        Assert.True(snapshot.Truncated);
+        Assert.True(Flatten(snapshot.Roots).Count() > 8);
+    }
+
     private static IEnumerable<WpfNode> Flatten(IEnumerable<WpfNode> roots)
     {
         foreach (var root in roots)

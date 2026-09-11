@@ -34,10 +34,21 @@ public static class ProtocolConstants
 
 public static class ScryJson
 {
+    /// <summary>
+    /// Well above System.Text.Json's default of 64, because that default is an incidental
+    /// serializer artifact rather than a protocol bound - and it bites at a surprisingly shallow
+    /// tree. A UI projection nests two JSON levels per tree level (a children array plus a node
+    /// object), so the WPF adapter's own 32-level cap alone reaches roughly 64, and snapshotting a
+    /// real application's window failed with a misleading "possible object cycle" error. The real
+    /// bounds are the adapters' node and depth budgets and the frame size cap, all still in force.
+    /// </summary>
+    public const int MaximumJsonDepth = 256;
+
     public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
+        WriteIndented = false,
+        MaxDepth = MaximumJsonDepth
     };
 }
 

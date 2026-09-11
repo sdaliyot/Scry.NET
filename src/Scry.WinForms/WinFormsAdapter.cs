@@ -231,10 +231,15 @@ public sealed class WinFormsAdapter
         JsonElement arguments,
         CancellationToken cancellationToken)
     {
-        var rootName = RequiredString(arguments, "root");
+        // 'root' is optional here, unlike the typed overload: an injected target registers no
+        // roots, so a caller has no way to learn a root name without first taking a snapshot.
+        var rootName = OptionalString(arguments, "root");
         var path = OptionalString(arguments, "path");
+
+        // Resolving the default reads Application.OpenForms, so it belongs inside the dispatcher
+        // like everything else here.
         return await _dispatcher.InvokeAsync(
-            () => CaptureScreenshot(rootName, path),
+            () => CaptureScreenshot(rootName ?? DefaultScreenshotRootName(), path),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -261,6 +266,26 @@ public sealed class WinFormsAdapter
             budget.NodesVisited,
             budget.Truncated,
             ProjectionLimitation);
+    }
+
+    /// <summary>
+    /// The root a screenshot means when the caller did not name one: the only root if there is
+    /// exactly one, otherwise an error naming the candidates. Needed because an injected target
+    /// has no registered roots to name.
+    /// </summary>
+    private string DefaultScreenshotRootName()
+    {
+        var roots = AllRoots();
+        if (roots.Count == 1)
+        {
+            return roots[0].Key;
+        }
+
+        throw new ArgumentException(
+            roots.Count == 0
+                ? "No Windows Forms roots are available to capture."
+                : "'root' is required because this target has several roots. Available roots: " +
+                    string.Join(", ", roots.Select(item => item.Key)) + ".");
     }
 
     private IReadOnlyList<KeyValuePair<string, Control>> ResolveRoots(string? rootName)

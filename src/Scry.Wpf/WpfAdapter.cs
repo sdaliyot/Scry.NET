@@ -356,12 +356,20 @@ public sealed class WpfAdapter
 
     public async ValueTask<object?> ScreenshotAsync(
         JsonElement arguments,
-        CancellationToken cancellationToken) =>
-        await ScreenshotAsync(
-            RequiredString(arguments, "root"),
-            OptionalString(arguments, "path"),
-            ParseTreeKind(OptionalString(arguments, "tree")),
+        CancellationToken cancellationToken)
+    {
+        // 'root' is optional here, unlike the typed overload above: an injected target registers no
+        // roots, so a caller has no way to learn a root name without first taking a snapshot.
+        var requestedRoot = OptionalString(arguments, "root");
+        var path = OptionalString(arguments, "path");
+        var treeKind = ParseTreeKind(OptionalString(arguments, "tree"));
+
+        // Resolving the default has to happen inside the dispatcher, because it reads
+        // Application.Windows, which is UI-thread affine like everything else here.
+        return await _dispatcher.InvokeAsync(
+            () => CaptureScreenshot(requestedRoot ?? DefaultScreenshotRootName(), path, treeKind),
             cancellationToken).ConfigureAwait(false);
+    }
 
     private WpfSnapshot CreateSnapshot(WpfTreeKind treeKind, string? rootName)
     {
@@ -393,6 +401,33 @@ public sealed class WpfAdapter
             budget.Truncated,
             treeKind == WpfTreeKind.Visual ? VisualLimitation : LogicalLimitation,
             CreateApplicationInfo());
+    }
+
+    /// <summary>
+    /// The root a screenshot means when the caller did not name one: the application main window
+    /// if there is one, otherwise the only root, and otherwise an error naming the candidates so
+    /// the caller can pick. Needed because an injected target has no registered roots to name.
+    /// </summary>
+    private string DefaultScreenshotRootName()
+    {
+        var roots = AllRoots();
+        var main = roots.FirstOrDefault(item =>
+            string.Equals(item.Key, "application.mainWindow", StringComparison.Ordinal));
+        if (main is not null)
+        {
+            return main.Key;
+        }
+
+        if (roots.Count == 1)
+        {
+            return roots[0].Key;
+        }
+
+        throw new ArgumentException(
+            roots.Count == 0
+                ? "No WPF roots are available to capture."
+                : "'root' is required because this target has several roots and no application " +
+                    "main window. Available roots: " + string.Join(", ", roots.Select(item => item.Key)) + ".");
     }
 
     private IReadOnlyList<ResolvedRoot> ResolveRoots(string? rootName)
