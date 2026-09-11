@@ -29,13 +29,22 @@ public sealed class JobDisposalTests
                     // so it keeps running past the JobManager shutdown grace period (5 seconds).
                     await Task.Delay(TimeSpan.FromSeconds(6), CancellationToken.None).ConfigureAwait(false);
 
-                    // A fresh cancellable await performed after the grace period has elapsed.
-                    // Before the fix, the manager forcibly disposed this job's
-                    // CancellationTokenSource once the grace period elapsed, so registering a new
-                    // callback here threw ObjectDisposedException instead of letting the job
-                    // observe cooperative cancellation normally.
-                    await Task.Delay(TimeSpan.FromMilliseconds(50), context.CancellationToken)
-                        .ConfigureAwait(false);
+                    // Observe cancellation through the token's wait handle after the grace period
+                    // has elapsed. This models a job that blocks on a handle - legacy or interop
+                    // work that cannot await - and is the operation that actually exercises the bug.
+                    //
+                    // WaitHandle is deliberate, not incidental: it is the only CancellationToken
+                    // member that throws ObjectDisposedException once its source is disposed.
+                    // Register and Task.Delay(_, token) both short-circuit on an already-cancelled
+                    // token without touching the source, and JobManager.Dispose() cancels before it
+                    // disposes - which is why a Task.Delay here passed even against the pre-fix code.
+                    //
+                    // Pre-fix, JobManager.Dispose() disposed this job's CancellationTokenSource as
+                    // soon as the grace period elapsed, so this threw. Post-fix, disposal is
+                    // deferred until the job's own execution completes, so the handle is still
+                    // valid here - and already signalled, because cancellation was requested.
+                    var signalled = context.CancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+                    Assert.True(signalled, "the job's cancellation handle should already be signalled");
                 }
                 catch (OperationCanceledException)
                 {
