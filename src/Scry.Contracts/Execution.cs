@@ -20,12 +20,18 @@ public sealed record ExecutionRequest(
     int? TimeoutMilliseconds = null,
     string? Marshal = null);
 
+/// <param name="CompilationCached">
+/// True when the submission reused an already-compiled script rather than compiling. Lets a caller
+/// tell a fast repeat from a cold compile, and makes the script cache observable without relying
+/// on timing.
+/// </param>
 public sealed record ExecutionResult(
     RemoteValue Value,
     IReadOnlyList<ExecutionLogEntry> Logs,
     int DroppedLogEntries,
     IReadOnlyList<CompilationDiagnostic> Diagnostics,
-    long ElapsedMilliseconds);
+    long ElapsedMilliseconds,
+    bool CompilationCached = false);
 
 public sealed record ExecutionLogEntry(
     DateTimeOffset Timestamp,

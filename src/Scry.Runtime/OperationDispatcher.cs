@@ -446,7 +446,8 @@ internal sealed class OperationDispatcher(
             result.Logs,
             result.DroppedLogEntries,
             result.Diagnostics,
-            result.ElapsedMilliseconds);
+            result.ElapsedMilliseconds,
+            result.CompilationCached);
     }
 
     private async ValueTask<object> ExecuteAsync(
@@ -461,7 +462,8 @@ internal sealed class OperationDispatcher(
             result.Logs,
             result.DroppedLogEntries,
             result.Diagnostics,
-            result.ElapsedMilliseconds);
+            result.ElapsedMilliseconds,
+            result.CompilationCached);
     }
 
     private object LoadAssembly(JsonElement payload) =>

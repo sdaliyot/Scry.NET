@@ -78,6 +78,7 @@ internal sealed class ExecutionEngine
     private readonly AgentConfiguration _configuration;
     private readonly RuntimeHostOptions _options;
     private readonly AssemblyCatalog _assemblies;
+    private readonly ScriptCache _scripts;
 
     public ExecutionEngine(
         AgentConfiguration configuration,
@@ -87,6 +88,7 @@ internal sealed class ExecutionEngine
         _configuration = configuration;
         _options = options;
         _assemblies = assemblies;
+        _scripts = new(options.MaximumCachedScripts);
     }
 
     public async ValueTask<ExecutionOutput> EvaluateAsync(
@@ -132,30 +134,49 @@ internal sealed class ExecutionEngine
             executionToken,
             logs);
         var globals = new ExecutionGlobals(context);
-        var options = ScriptOptions.Default
-            .WithEmitDebugInformation(false)
-            .WithReferences(_assemblies.GetMetadataReferences(
-                request.References,
-                _options.MaximumExecutionReferences))
-            .WithImports(DefaultImports.Concat(request.Imports ?? Array.Empty<string>())
-                .Distinct(StringComparer.Ordinal));
+        var imports = DefaultImports.Concat(request.Imports ?? Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var source = isStatementBody ? WrapStatementBody(request.Source) : request.Source;
-        var assemblyLoader = _assemblies.CreateExecutionAssemblyLoader();
-        var script = CSharpScript.Create<object?>(
-            source,
-            options,
-            typeof(ExecutionGlobals),
-            assemblyLoader);
+
+        // Reuse an already-compiled script when the same submission comes back. wait polls one
+        // expression repeatedly, so without this every attempt paid a full compile - and a compile
+        // means building a metadata reference for every loaded assembly plus Roslyn codegen, which
+        // in a real application ran into seconds per attempt.
+        var cacheKey = new ScriptCacheKey(source, imports, request.References);
+        var compilationCached = _scripts.TryGet(cacheKey, out var script, out var diagnostics);
+        if (!compilationCached)
+        {
+            var options = ScriptOptions.Default
+                .WithEmitDebugInformation(false)
+                .WithReferences(_assemblies.GetMetadataReferences(
+                    request.References,
+                    _options.MaximumExecutionReferences))
+                .WithImports(imports);
+            script = CSharpScript.Create<object?>(
+                source,
+                options,
+                typeof(ExecutionGlobals),
+                _assemblies.CreateExecutionAssemblyLoader());
+        }
+
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var diagnostics = script.Compile(executionToken).Select(ToDiagnostic).ToArray();
-            var errors = diagnostics
-                .Where(diagnostic => diagnostic.Severity == nameof(DiagnosticSeverity.Error))
-                .ToArray();
-            if (errors.Length != 0)
+            if (!compilationCached)
             {
-                throw new ScryCompilationException(errors);
+                diagnostics = script.Compile(executionToken).Select(ToDiagnostic).ToArray();
+                var errors = diagnostics
+                    .Where(diagnostic => diagnostic.Severity == nameof(DiagnosticSeverity.Error))
+                    .ToArray();
+                if (errors.Length != 0)
+                {
+                    // Deliberately not cached: the type this needed may simply not be loaded yet,
+                    // and recompiling next time lets the same submission start working.
+                    throw new ScryCompilationException(errors);
+                }
+
+                _scripts.Add(cacheKey, script, diagnostics);
             }
 
             // No ConfigureAwait(false) inside: when this runs through a marshaller the dispatcher's
@@ -173,7 +194,13 @@ internal sealed class ExecutionEngine
                 ? await marshaller(RunSubmissionAsync, executionToken).ConfigureAwait(false)
                 : await RunSubmissionAsync().ConfigureAwait(false);
             stopwatch.Stop();
-            return new(value, logs.Entries, logs.DroppedCount, diagnostics, stopwatch.ElapsedMilliseconds);
+            return new(
+                value,
+                logs.Entries,
+                logs.DroppedCount,
+                diagnostics,
+                stopwatch.ElapsedMilliseconds,
+                compilationCached);
         }
         catch (OperationCanceledException) when (
             timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -287,7 +314,8 @@ internal sealed record ExecutionOutput(
     IReadOnlyList<ExecutionLogEntry> Logs,
     int DroppedLogEntries,
     IReadOnlyList<CompilationDiagnostic> Diagnostics,
-    long ElapsedMilliseconds);
+    long ElapsedMilliseconds,
+    bool CompilationCached);
 
 internal sealed class ScryCompilationException(IReadOnlyList<CompilationDiagnostic> diagnostics)
     : Exception("C# compilation failed.")

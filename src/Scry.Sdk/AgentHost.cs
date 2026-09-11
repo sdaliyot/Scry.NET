@@ -28,6 +28,11 @@ public sealed class AgentHostOptions
 
     public int MaximumExecutionReferences { get; init; } = 256;
 
+    /// <summary>
+    /// How many compiled submissions to keep, bounding the script cache.
+    /// </summary>
+    public int MaximumCachedScripts { get; init; } = 64;
+
     public int MaximumExecutionImports { get; init; } = 64;
 
     public int MaximumLogEntries { get; init; } = 256;
@@ -344,6 +349,7 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
                 MaximumExecutionMilliseconds = selected.MaximumExecutionMilliseconds,
                 DefaultExecutionMilliseconds = selected.DefaultExecutionMilliseconds,
                 MaximumExecutionReferences = selected.MaximumExecutionReferences,
+                MaximumCachedScripts = selected.MaximumCachedScripts,
                 MaximumExecutionImports = selected.MaximumExecutionImports,
                 MaximumLogEntries = selected.MaximumLogEntries,
                 MaximumLogMessageLength = selected.MaximumLogMessageLength,

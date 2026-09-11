@@ -10,6 +10,18 @@ namespace Scry.Runtime;
 
 internal sealed class AssemblyCatalog
 {
+    /// <summary>
+    /// Metadata references keyed by assembly file path. MetadataReference.CreateFromFile reads and
+    /// parses the file, and it was previously called for every compatible loaded assembly on every
+    /// single execution - a few hundred file reads per evaluate in a real application, which
+    /// dominated compile time. A loaded assembly's file cannot be swapped underneath the loaded
+    /// image, so the parsed metadata stays valid for the life of the process. A null value records
+    /// a path that is not usable metadata, so unreadable and native modules are not retried.
+    /// Naturally bounded by the number of distinct assembly paths in the process.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, MetadataReference?> _metadataReferences =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly object _gate = new();
 #if !NETFRAMEWORK
     private readonly List<AssemblyLoadContext> _retainedContexts = [];
@@ -217,14 +229,22 @@ internal sealed class AssemblyCatalog
             .Where(path => path is not null)
             .Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            try
+            var reference = _metadataReferences.GetOrAdd(path!, static candidate =>
             {
-                references.Add(MetadataReference.CreateFromFile(path!));
-            }
-            catch (Exception exception) when (
-                exception is BadImageFormatException or IOException or UnauthorizedAccessException)
+                try
+                {
+                    return MetadataReference.CreateFromFile(candidate);
+                }
+                catch (Exception exception) when (
+                    exception is BadImageFormatException or IOException or UnauthorizedAccessException)
+                {
+                    // Native or unreadable modules are not compatible Roslyn metadata references.
+                    return null;
+                }
+            });
+            if (reference is not null)
             {
-                // Native or unreadable modules are not compatible Roslyn metadata references.
+                references.Add(reference);
             }
         }
 

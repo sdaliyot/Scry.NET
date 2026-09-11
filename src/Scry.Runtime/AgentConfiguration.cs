@@ -27,6 +27,12 @@ public sealed class RuntimeHostOptions
 
     public int MaximumExecutionReferences { get; init; } = 256;
 
+    /// <summary>
+    /// How many compiled submissions to keep. Bounds the script cache so a client sending many
+    /// distinct submissions cannot grow it without limit.
+    /// </summary>
+    public int MaximumCachedScripts { get; init; } = 64;
+
     public int MaximumExecutionImports { get; init; } = 64;
 
     public int MaximumLogEntries { get; init; } = 256;

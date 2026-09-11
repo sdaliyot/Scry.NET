@@ -378,6 +378,41 @@ Timeouts and cancellation are cooperative. The configured server deadline cancel
 
 Host defaults are configurable through `AgentHostOptions`: source length, default/maximum execution milliseconds, imports/references, bounded logs, type result/member limits, and assembly file size. The protocol frame limit remains an independent upper bound.
 
+
+### Compilation reuse
+
+Compiling a submission is expensive in a real process: it builds a Roslyn metadata reference for
+every compatible loaded assembly and then runs codegen. Measured against a WPF application with a
+few hundred loaded assemblies, one `evaluate` cost roughly eight seconds. `wait` re-evaluates a
+single expression until it holds, so without reuse every poll paid that again - a poll loop cost
+seconds per attempt rather than milliseconds.
+
+Two caches address it, and between them a repeated submission goes from about eight seconds to
+zero:
+
+- `AssemblyCatalog` caches `MetadataReference` instances by assembly file path. A loaded
+  assembly's file cannot be swapped underneath the loaded image, so the parsed metadata stays
+  valid for the life of the process. This speeds up *every* compile, including the first one for a
+  new submission.
+- `ScriptCache` caches the compiled `Script` by source, imports and explicit references, bounded
+  by `MaximumCachedScripts` (default 64) with approximate least-recently-used eviction. The key
+  uses the already-wrapped source, so an `evaluate` expression and an `execute` statement body
+  with the same text cannot share an entry.
+
+Only successful compilations are cached, which is what keeps this honest in a process that is
+still loading assemblies: a submission that failed to compile because its type was not loaded yet
+is recompiled next time and can then succeed, while a submission that already compiled stays valid
+because the assemblies it bound to cannot be unloaded from the default AppDomain.
+
+`ExecutionResult.CompilationCached` reports which path a submission took, so a caller can tell a
+fast repeat from a cold compile, and tests can assert the behaviour without relying on timing.
+
+One cost no cache removes: a marshalled submission has to wait for the target's UI thread. While
+the target is busy - during its own startup, say - each marshalled poll queues behind that work.
+Measured on an idle application a marshalled `wait` attempt costs about seven milliseconds beyond
+the poll interval; during application startup the same attempt cost about a second, all of it
+waiting for the dispatcher.
+
 ## Assembly loading and type discovery
 
 `load-assembly` requires an absolute path. Loading differs by runtime:

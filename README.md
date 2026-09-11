@@ -147,6 +147,9 @@ scry assert --target app --request assert-count.json
 
 `wait` polls until the condition holds or `timeoutMilliseconds` elapses, and reports a timeout as a
 successful response carrying `satisfied: false` — read the flag, do not infer it from the exit code.
+Repeating a submission reuses its compiled script, so polling costs about the poll interval rather
+than a recompile per attempt; `evaluate`/`execute` results carry `compilationCached` to distinguish
+a reused script from a cold compile.
 `assert` evaluates once and fails the request with `assertion_failed` and a description of the
 comparison. Use `wait` to gate, `assert` to fail.
 

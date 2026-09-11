@@ -369,6 +369,33 @@ Two things to keep in mind:
 For a bulk read of UI structure, prefer `wpf.snapshot`/`winforms.snapshot`: they marshal internally,
 return a bounded projection in one request, and do not need `marshal`.
 
+### Repeated submissions are cheap; the first one is not
+
+Compiling a submission builds a metadata reference for every loaded assembly and then runs codegen,
+which in a large application takes seconds. Repeating the *same* submission reuses the compiled
+script, so `wait` polls at essentially the cost of its poll interval. `evaluate`/`execute` results
+carry `compilationCached` so you can tell a reused script from a cold compile.
+
+Practical consequences:
+
+- Reuse one expression across polls rather than varying it. A condition that embeds a changing
+  value in its source recompiles every time; put the varying part in `expected` instead.
+- Budget for the first call. Against a large application expect several seconds for the first
+  `evaluate` after attaching, and near-zero afterwards.
+- A marshalled poll still waits for the target's UI thread. While the application is busy with its
+  own startup, each attempt can cost roughly a second regardless of caching.
+
+### Setting a value and acting on it need separate submissions
+
+WPF updates bindings on a later dispatcher turn. A submission that sets a control's value and then
+invokes the command that reads it will see the *old* value, because the binding has not run yet.
+This is easy to get wrong and fails silently - the command executes with stale input.
+
+Send two requests instead: one to set the value, one to invoke. Each submission is its own
+dispatcher turn, so bindings have run in between. This matters most for `PasswordBox`, whose
+`Password` is not a dependency property and is usually surfaced to a command through a
+`CommandParameter` binding or a behaviour.
+
 ## WPF recipe
 
 The target must advertise `wpf.snapshot`, `wpf.wait`, `wpf.assert`, and
