@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The point of this sample is what it does NOT contain: no ProjectReference or PackageReference
+    to any Scry assembly. It is the only way to prove attach mode actually attaches to an
+    unmodified process rather than relying on host cooperation, so do not add one.
+
+    .NET Framework only, because the FX path (ExecuteInDefaultAppDomain) is the one that motivated
+    attach mode and the one the real target runs on.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>$(ScryNetFrameworkTarget)</TargetFramework>
+    <AssemblyName>Scry.AttachWpfTarget</AssemblyName>
+    <RootNamespace>Scry.AttachWpfTarget</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- No XAML here, so no markup compilation is needed; plain references are enough. -->
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
+
+</Project>

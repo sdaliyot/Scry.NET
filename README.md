@@ -2,12 +2,12 @@
 
 Scry.NET is a Windows-only developer and test framework for inspecting and deliberately mutating a running managed application. Each target owns its endpoint and state; the stateless `scry` CLI connects over a local Windows named pipe.
 
-Two hosting models are planned:
+Two hosting models are available:
 
-- **Embedded mode (implemented):** the target opts in with `Scry.Sdk`, registers described roots, values, and policy-tagged operations, and starts an `AgentHost`. Registrations can also be replaced or removed safely while the host is running.
-- **Attach mode (future):** tooling injects or loads the runtime into an existing managed process. Injection is not part of this foundation.
+- **Embedded mode:** the target opts in with `Scry.Sdk`, registers described roots, values, and policy-tagged operations, and starts an `AgentHost`. Registrations can also be replaced or removed safely while the host is running.
+- **Attach mode (developer/test only):** `scry attach` loads an architecture-matched native bootstrap into an already-running managed process and starts the same `AgentHost` in its default AppDomain, so the target never references Scry.NET.
 
-The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md). Injection remains deferred.
+The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md).
 
 | Component | Supported targets |
 |---|---|
@@ -15,8 +15,13 @@ The endpoint supports non-UI processes as a first-class scenario. The core packa
 | `Scry.SampleHost` | .NET 9 and .NET Framework 4.7.2 |
 | `Scry.Cli` | .NET 9 only; it can connect to either runtime |
 | `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) and .NET Framework 4.7.2 |
+| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on .NET 9 and attaches to Windows x86/x64 processes on .NET Framework 4.7.2 or .NET 9. x64 is verified end to end; x86 is implemented but unverified. |
 
 Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only developer/test tooling**, not a remote administration service. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
+
+Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
+
+Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only (x64 verified, x86 unverified), .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
 
 Build and test:
 
@@ -53,6 +58,16 @@ AI coding agents should follow the comprehensive
 target selection, structured inspection before code execution, desktop and non-UI
 recipes, waits/assertions, jobs, multi-process scenarios, retries, expected JSON shapes,
 and security boundaries.
+
+## Attaching to a process that does not reference Scry
+
+```powershell
+dotnet run --project src\Scry.Cli -c Release -- attach <pid-or-process-name> [--adapters wpf|winforms]
+```
+
+The command injects the endpoint, waits for its discovery descriptor, performs a real protocol handshake, and prints structured JSON without exposing the capability token. Build the architecture-matched native helpers first as described in [`docs/development.md`](docs/development.md).
+
+Pass `--adapters wpf` (or `winforms`) to wire the matching desktop adapter inside the target. Without it an attached endpoint has only the framework-neutral surface, so `wpf.*` operations are absent and `evaluate`/`execute` cannot use `"marshal": "ui"` - which means they cannot touch a `DependencyObject` or a `Control` at all. The adapter needs no cooperation from the target application: it discovers `Application.Current.Windows` and reuses the target's existing dispatcher.
 
 See [`docs/development.md`](docs/development.md) for protocol and extension guidance.
 

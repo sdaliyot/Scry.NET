@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
+    <ProjectReference Include="..\Scry.Injector\Scry.Injector.csproj" />
     <ProjectReference Include="..\Scry.Sdk\Scry.Sdk.csproj" />
   </ItemGroup>
 
@@ -13,5 +14,18 @@
     <ToolCommandName>scry</ToolCommandName>
     <PackageId>Scry.Cli</PackageId>
   </PropertyGroup>
+
+  <Target Name="StageInjectorComponents" AfterTargets="Build">
+    <ItemGroup>
+      <InjectorPayload Include="..\Scry.Injector\bin\$(Configuration)\$(ScryModernTargetFramework)\payload\**\*" />
+      <InjectorNative Include="..\Scry.Injector\bin\$(Configuration)\$(ScryModernTargetFramework)\native\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(InjectorPayload)"
+          DestinationFiles="@(InjectorPayload->'$(TargetDir)payload\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(InjectorNative)"
+          DestinationFiles="@(InjectorNative->'$(TargetDir)native\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

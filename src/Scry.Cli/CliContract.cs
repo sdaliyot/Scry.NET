@@ -36,6 +36,31 @@ internal static class CliContract
             [],
             "Discovery result with protocolVersion and a deterministic targets array."),
         Local(
+            "attach",
+            "Inject the endpoint into a running process that does not reference Scry.",
+            "scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none]",
+            "scry attach 1234 --adapters wpf",
+            [
+                new CliField(
+                    "<pid|process-name>",
+                    "string",
+                    true,
+                    "Target process ID, or a process name that matches exactly one process."),
+                new CliField(
+                    "--alias",
+                    "string",
+                    false,
+                    "Alias to publish for the injected endpoint, for later --target use."),
+                new CliField(
+                    "--adapters",
+                    "wpf|winforms|none",
+                    false,
+                    "Desktop adapter to wire inside the target. Defaults to none, which leaves " +
+                    "the endpoint framework-neutral: no wpf.*/winforms.* operations and no " +
+                    "\"marshal\": \"ui\", so submissions cannot touch a DependencyObject or Control.")
+            ],
+            "Attach result with the target descriptor path and a real protocol handshake; never the capability token."),
+        Local(
             "schema",
             "Emit the machine-readable CLI command and response contract.",
             "scry schema",
@@ -384,6 +409,7 @@ internal static class CliContract
                 """
                 Usage:
                   scry discover
+                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none]
                   scry schema
                   scry <command> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry jobs <start|status|wait|cancel|logs> (--target <id-or-alias> | --descriptor <path>) [options]
@@ -391,7 +417,7 @@ internal static class CliContract
                   scry help [command]
 
                 Commands:
-                  Discovery:  discover, capabilities, roots
+                  Discovery:  discover, attach, capabilities, roots
                   Objects:    inspect, get, set, invoke, enumerate, release
                   Execution:  evaluate, execute
                   Assemblies: load-assembly, list-assemblies, find-types, describe-type

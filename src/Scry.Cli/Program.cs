@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Scry.Contracts;
+using Scry.Injector;
 using Scry.Sdk;
 
 return await Cli.RunAsync(args);
@@ -43,6 +44,14 @@ internal static class Cli
             }
 
             var (command, optionArguments) = ParseCommand(args);
+
+            // attach takes a positional process ID or name rather than --target/--descriptor,
+            // because the point is that the target has no endpoint to address yet.
+            if (command == "attach")
+            {
+                return await AttachAsync(optionArguments).ConfigureAwait(false);
+            }
+
             var options = ParseOptions(optionArguments);
             if (command == "discover")
             {
@@ -101,6 +110,12 @@ internal static class Cli
             Console.Error.WriteLine("Run 'scry --help' or 'scry help <command>' for usage.");
             return UsageError;
         }
+        catch (InjectionException exception)
+        {
+            var error = exception.ToError();
+            WriteError(error.Code, error.Message, error.NativeError);
+            return TargetError;
+        }
         catch (Exception exception) when (
             exception is FileNotFoundException or DirectoryNotFoundException or
             KeyNotFoundException or InvalidDataException or InvalidOperationException or
@@ -109,6 +124,7 @@ internal static class Cli
             WriteError("target_not_found", exception.Message);
             return TargetError;
         }
+
         catch (ScryRemoteException exception)
         {
             WriteJson(exception.Response);
@@ -152,6 +168,41 @@ internal static class Cli
         }
 
         return ($"job.{action}", args[2..]);
+    }
+
+    private static async Task<int> AttachAsync(string[] args)
+    {
+        AttachArguments parsed;
+        try
+        {
+            parsed = AttachCommandLine.Parse(args);
+        }
+        catch (AttachUsageException exception)
+        {
+            throw new CliUsageException(exception.Message);
+        }
+
+        var result = await AttachService
+            .AttachAsync(parsed.Target, parsed.Alias, parsed.Adapters)
+            .ConfigureAwait(false);
+        if (!result.Success)
+        {
+            WriteJson(result);
+            return TargetError;
+        }
+
+        await using var client = await ScryClient.ConnectAsync(
+            result.Descriptor!,
+            clientName: "scry attach",
+            ephemeralSession: true).ConfigureAwait(false);
+        WriteJson(new
+        {
+            success = true,
+            target = result.Target,
+            descriptorPath = result.DescriptorPath,
+            handshake = client.Handshake
+        });
+        return Success;
     }
 
     private static async Task<int> DiscoverAsync()
@@ -483,7 +534,7 @@ internal static class Cli
     private static void WriteJson<T>(T value) =>
         Console.Out.WriteLine(JsonSerializer.Serialize(value, ScryJson.Options));
 
-    private static void WriteError(string code, string message) =>
-        WriteJson(new { success = false, error = new { code, message } });
+    private static void WriteError(string code, string message, int? nativeError = null) =>
+        WriteJson(new { success = false, error = new { code, message, nativeError } });
 
 }

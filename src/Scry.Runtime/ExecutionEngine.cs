@@ -138,10 +138,12 @@ internal sealed class ExecutionEngine
             .WithImports(DefaultImports.Concat(request.Imports ?? Array.Empty<string>())
                 .Distinct(StringComparer.Ordinal));
         var source = isStatementBody ? WrapStatementBody(request.Source) : request.Source;
+        var assemblyLoader = _assemblies.CreateExecutionAssemblyLoader();
         var script = CSharpScript.Create<object?>(
             source,
             options,
-            typeof(ExecutionGlobals));
+            typeof(ExecutionGlobals),
+            assemblyLoader);
         var stopwatch = Stopwatch.StartNew();
         try
         {

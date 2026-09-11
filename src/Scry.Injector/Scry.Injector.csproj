@@ -1,0 +1,96 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
+    <ProjectReference Include="..\Scry.Sdk\Scry.Sdk.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(ScryModernTargetFramework)</TargetFramework>
+    <AssemblyName>scry-injector</AssemblyName>
+    <PackageId>Scry.Injector</PackageId>
+    <Description>Windows attach-mode injector for Scry.NET.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Scry.Tests" />
+  </ItemGroup>
+
+  <!--
+    Staged payload directory names are deliberately NOT target framework monikers. The runtime
+    consumer is AttachService.ResolveComponents, which picks a directory from the target's
+    detected CLR family rather than from a TFM - so retargeting the .NET Framework leg (net48
+    to net472 already happened once) must not require a C# change. Keep in sync with
+    ScryPayloadLayout in AttachService.cs.
+  -->
+  <PropertyGroup>
+    <ScryModernPayloadDirectory>net</ScryModernPayloadDirectory>
+    <ScryNetFrameworkPayloadDirectory>netfx</ScryNetFrameworkPayloadDirectory>
+  </PropertyGroup>
+
+  <Target Name="BuildInjectionPayloads" AfterTargets="Build">
+    <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernTargetFramework)" />
+    <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget)" />
+
+    <!--
+      Stage the optional desktop adapters beside each payload so an attach that requests one
+      can load it on demand. They are loaded reflectively rather than referenced: the payload
+      targets net9.0 while the modern adapters target net9.0-windows, and a hard reference would
+      make every attach - including into a non-UI process - depend on the WindowsDesktop shared
+      framework being present in the target.
+    -->
+    <MSBuild Projects="..\Scry.Wpf\Scry.Wpf.csproj;..\Scry.WinForms\Scry.WinForms.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernWindowsTargetFramework)" />
+    <MSBuild Projects="..\Scry.Wpf\Scry.Wpf.csproj;..\Scry.WinForms\Scry.WinForms.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget)" />
+
+    <ItemGroup>
+      <ModernPayload Include="..\Scry.Injector.Payload\bin\$(Configuration)\$(ScryModernTargetFramework)\**\*" />
+      <NetFrameworkPayload Include="..\Scry.Injector.Payload\bin\$(Configuration)\$(ScryNetFrameworkTarget)\**\*" />
+      <ModernAdapter Include="..\Scry.Wpf\bin\$(Configuration)\$(ScryModernWindowsTargetFramework)\Scry.Wpf.dll" />
+      <ModernAdapter Include="..\Scry.WinForms\bin\$(Configuration)\$(ScryModernWindowsTargetFramework)\Scry.WinForms.dll" />
+      <NetFrameworkAdapter Include="..\Scry.Wpf\bin\$(Configuration)\$(ScryNetFrameworkTarget)\Scry.Wpf.dll" />
+      <NetFrameworkAdapter Include="..\Scry.WinForms\bin\$(Configuration)\$(ScryNetFrameworkTarget)\Scry.WinForms.dll" />
+      <NativeX64 Include="..\..\native\Scry.Injector.Native\bin\x64\$(Configuration)\Scry.Injector.Native.dll"
+                 Condition="Exists('..\..\native\Scry.Injector.Native\bin\x64\$(Configuration)\Scry.Injector.Native.dll')" />
+      <NativeX86 Include="..\..\native\Scry.Injector.Native\bin\Win32\$(Configuration)\Scry.Injector.Native.dll"
+                 Condition="Exists('..\..\native\Scry.Injector.Native\bin\Win32\$(Configuration)\Scry.Injector.Native.dll')" />
+    </ItemGroup>
+
+    <!--
+      Without this the managed build succeeds while quietly producing a CLI that cannot attach:
+      the native Copy items below are Exists()-guarded, so a forgotten native build only shows up
+      much later as a MissingNativeHelper failure at attach time. Opt in for Release and CI with
+      -p:RequireNativeInjector=true; Debug inner-loop builds stay quiet on purpose.
+    -->
+    <Error Condition="'$(RequireNativeInjector)' == 'true' and '@(NativeX64)' == '' and '@(NativeX86)' == ''"
+           Text="No native bootstrap DLL was found under native\Scry.Injector.Native\bin. Run .\build-native.ps1 before the managed build (see docs/development.md)." />
+
+    <Copy SourceFiles="@(ModernPayload)"
+          DestinationFiles="@(ModernPayload->'$(TargetDir)payload\$(ScryModernPayloadDirectory)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(NetFrameworkPayload)"
+          DestinationFiles="@(NetFrameworkPayload->'$(TargetDir)payload\$(ScryNetFrameworkPayloadDirectory)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(ModernAdapter)"
+          DestinationFolder="$(TargetDir)payload\$(ScryModernPayloadDirectory)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(NetFrameworkAdapter)"
+          DestinationFolder="$(TargetDir)payload\$(ScryNetFrameworkPayloadDirectory)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(NativeX64)"
+          DestinationFolder="$(TargetDir)native\win-x64"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(NativeX86)"
+          DestinationFolder="$(TargetDir)native\win-x86"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

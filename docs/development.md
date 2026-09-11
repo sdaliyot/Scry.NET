@@ -9,11 +9,15 @@
 | `Scry.Sdk` | Embedded `AgentHost`, registration builder, protocol client |
 | `Scry.Wpf` | Optional dispatcher-safe WPF projections, waits/assertions, screenshots |
 | `Scry.WinForms` | Optional control-owner-marshalled WinForms projections, waits/assertions, screenshots |
+| `Scry.Injector.Payload` | Minimal managed entry point that retains the shared `AgentHost` |
+| `Scry.Injector` | Process detection, refusal policy, native loading, and attach orchestration |
+| `Scry.Injector.Native` | Architecture-specific Win32/CLR bootstrap DLL |
 | `Scry.Cli` | Stateless `scry` JSON command line |
 | `Scry.SampleHost` | Console embedded example |
 | `Scry.SampleWorker` | Long-running background/worker embedded example |
 | `Scry.SampleWpf` | Minimal runnable WPF embedded example |
 | `Scry.SampleWinForms` | Minimal runnable WinForms embedded example |
+| `Scry.AttachTarget` | Non-UI process that deliberately does not reference Scry |
 | `Scry.Tests` | Protocol, runtime, and discovery tests |
 | `Scry.Wpf.Tests` | STA dispatcher tests for the optional WPF adapter |
 | `Scry.WinForms.Tests` | STA message-loop tests for the optional WinForms adapter |
@@ -32,6 +36,9 @@ Target names and compatibility package versions are centralized in `Directory.Bu
 | `Scry.Wpf.Tests` | `net9.0-windows`, `net472` | STA dispatcher tests, both runtimes |
 | `Scry.WinForms.Tests` | `net9.0-windows`, `net472` | STA message-loop tests, both runtimes |
 | `Scry.Cli` | `net9.0` | Modern-only executable that interoperates with both host targets |
+| `Scry.Injector.Payload` | `net9.0`, `net472` | Calls the same `AgentHost.Start` used by embedded mode |
+| `Scry.Injector` | `net9.0` | Must run with the same x86/x64 architecture as the target |
+| `Scry.Injector.Native` | Win32 x86, x64 | Native DLL loaded into the target |
 
 The `Microsoft.NETFramework.ReferenceAssemblies.net472` package makes SDK-style net472 builds independent of machine-installed targeting packs. Runtime validation still requires Windows with .NET Framework 4.7.2 installed.
 
@@ -173,6 +180,89 @@ Two operational limits apply. The submission holds the UI thread for its duratio
 
 WPF visual and logical snapshots are intentionally distinct: the visual view can omit logical-only values and unopened template or popup content, while the logical view can omit template-generated visuals. WinForms projects managed `Control` children, `Application.OpenForms`, owned-form metadata, `ToolStrip`/menu items, and bindings. Owner-drawn pixels, WebView2, ActiveX, `HwndHost`, native-child HWND internals, separate popup windows, protected content, and out-of-process surfaces can be absent. Screenshots use `RenderTargetBitmap` or `Control.DrawToBitmap` and return or throw explicit unsupported/failure results rather than claiming those surfaces were captured.
 
+## Attach mode
+
+`scry attach <pid|process-name> [--alias <name>]` attaches to an already-running managed process that has not referenced Scry. Process names must resolve to exactly one process; otherwise the command requires a PID. The command returns structured JSON, waits for discovery, and performs the same capability-token handshake as every other CLI connection.
+
+Attach uses a strict inspect-before-write sequence:
+
+1. Open the target for limited query access and call `IsWow64Process2` to classify x86/x64.
+2. Enumerate loaded modules and require exactly one supported runtime family: `clr.dll` for .NET Framework or `coreclr.dll` for modern .NET.
+3. Refuse architecture mismatch, ARM64, no CLR, mixed CLR families, access denial, a missing payload/helper, or an existing live Scry descriptor.
+4. Allocate a DLL path in the target, start `LoadLibraryW`, locate the injected module, and call its exported bootstrap on a second remote thread.
+5. For .NET Framework, the shim obtains the already-loaded CLR v4 through `ICLRMetaHost`/`ICLRRuntimeInfo`, verifies it is loaded, and calls `ICLRRuntimeHost::ExecuteInDefaultAppDomain`.
+6. For .NET 9, the shim obtains a hostfxr runtime delegate compatible with the already-running CoreCLR and calls the payload's `UnmanagedCallersOnly` entry point. It does not call `coreclr_initialize` and does not create a second runtime.
+7. `Scry.Injector.Payload` calls and retains `AgentHost.Start`; runtime, discovery, transport, authentication, capabilities, and behavior therefore remain identical to embedded mode.
+
+Native work is deliberately kept out of `DllMain`; `DllMain` only records the module handle and exported bootstrap work runs on the injector-created thread. The injector bounds all copied strings, waits with finite timeouts, releases remote allocations and handles, and maps Win32/bootstrap failures to stable codes including `permission_denied`, `loader_failed`, `security_software_interference`, and `bootstrap_failed`.
+
+Build both helpers before the managed Release build:
+
+```powershell
+.\build-native.ps1
+dotnet build Scry.sln -c Release
+```
+
+The managed build stages the x86/x64 helpers and the complete `payload\netfx` and `payload\net`
+directories beside `scry-injector`. Those directories are named by CLR family rather than by target
+framework on purpose: the consumer picks one from the target's detected runtime, so retargeting the
+.NET Framework leg needs no code change. Each also carries the optional `Scry.Wpf` and
+`Scry.WinForms` adapters, which the payload loads only when `--adapters` asks for one. Publish or
+run the injector for the target architecture; an x64 process cannot safely inject an x86 target and
+vice versa.
+
+Build the native helper before the managed build, and use `-p:RequireNativeInjector=true` for
+Release and CI so a forgotten native build fails the build instead of silently producing a CLI that
+cannot attach:
+
+```powershell
+.\build-native.ps1 -Architecture x64
+dotnet build Scry.sln -c Release -p:RequireNativeInjector=true
+```
+
+Before injecting into a .NET Framework target, the injector reads the target's `.exe.config` and
+refuses with `binding_conflict` if a `bindingRedirect` would downgrade one of the payload's own
+dependencies. This matters because the .NET Framework path loads the payload into the target's
+default AppDomain, under the target's binding policy, and the payload's `AssemblyResolve` hook
+cannot recover: a redirect is applied *before* that event fires, and the event only runs when a bind
+fails, not when it succeeds against the wrong version. The check is driven off the staged payload's
+real assembly versions rather than a fixed list, and is deliberately permissive about anything it
+cannot parse.
+
+### Desktop adapters in an attached target
+
+An embedded host calls `UseWpf`/`UseWinForms` itself. An attached target by definition cannot, so
+without `--adapters` an injected endpoint has only the framework-neutral surface: no `wpf.*` or
+`winforms.*` operations, and no execution marshaller, which means `evaluate`/`execute` cannot use
+`"marshal": "ui"` and therefore cannot touch a `DependencyObject` or a `Control` at all. That is the
+correct default for a non-UI target and useless for a desktop one, so the selection is explicit:
+
+```powershell
+scry attach <pid|process-name> --adapters wpf
+```
+
+`DesktopAdapterWiring` then loads the staged adapter reflectively and calls
+`UseWpf(Application.Current)` (or `UseWinForms` with the first open form). Two consequences worth
+knowing. The adapter needs no cooperation from the target: `UseWpf(Application)` enumerates
+`Application.Windows` when no roots are registered, and reuses the dispatcher the target already
+has rather than creating one. And the load is reflective rather than a project reference, both
+because the payload targets `net9.0` while the modern adapters target `net9.0-windows`, and because
+a hard reference would make every attach - including into a non-UI process - depend on the
+WindowsDesktop shared framework being present in the target.
+
+`--adapters wpf` against a process with no WPF loaded is refused with an explanatory error, as is a
+WPF target whose `Application.Current` is null.
+
+Attach mode is local, invasive developer/test tooling. It requires the same Windows user and an equal or higher integrity level. Protected processes and process-mitigation policies can prohibit remote allocation, writes, thread creation, or DLL loading. Antivirus/EDR products commonly block or quarantine these exact primitives. Do not weaken security controls globally; authorize the binary or test in an isolated environment. Never attach to software you do not own or have explicit permission to test.
+
+Current limits:
+
+- The endpoint starts only in the default AppDomain/default CoreCLR load context.
+- Supported targets are .NET Framework 4.7.2 (or later 4.x) and .NET 9 on Windows x86/x64. x64 is verified end to end; x86 is implemented but unverified.
+- Secondary AppDomains, ARM64, cross-architecture injection, remote machines, unload/detach, and production packaging are not implemented.
+- Runtime detection requires the managed runtime to be loaded before attach.
+- Native dependency resolution and host policy can still be constrained by target-specific mitigations or hosting models; failures are reported rather than falling back to an unsafe runtime start.
+
 ## Operations
 
 All non-handshake requests use the negotiated session. Subjects are selected with either `"root":"name"` or `"reference":{...}`. `inspect`, `get`, `set`, and `invoke` accept `"includeNonPublic":true` as an explicit opt-in.
@@ -252,7 +342,7 @@ Context.Log("message", "information")
 
 Registered root factories are evaluated once at the start of each execution. `Resolve` enforces the current target/session handle scope. Logs are bounded by entry count and message length and report dropped entries. Compilation failures use the normal failure envelope with code `compilation_failed` and structured diagnostics containing ID, severity, message, and one-based source spans. Exceptions thrown by compiled code use the ordinary recursive exception envelope.
 
-Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context or default AppDomain. Dynamic, native, and unreadable modules are skipped. On .NET 9, non-default-context modules are also skipped because Roslyn cannot safely bind script code to an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
+Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context, the injected agent's host context, or the .NET Framework default AppDomain. Dynamic, native, and unreadable modules are skipped. On .NET 9, unrelated non-default-context modules are skipped because Roslyn cannot safely bind script code to an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
 
 Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code that never observes server cancellation cannot be forcibly stopped safely inside the target process and can continue blocking that connection. Scry does not claim process isolation or hard timeouts.
 
@@ -316,6 +406,7 @@ Generated Roslyn script assemblies and assemblies loaded into the .NET Framework
 Run the modern and desktop CLR suites explicitly:
 
 ```powershell
+.\build-native.ps1
 dotnet build Scry.sln -c Release
 dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net9.0 --no-build
 dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64

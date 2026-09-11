@@ -31,30 +31,38 @@
     <ProjectReference Include="..\..\src\Scry.Contracts\Scry.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Scry.Runtime\Scry.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Scry.Sdk\Scry.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\Scry.Injector\Scry.Injector.csproj"
+                      Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
     <ProjectReference Include="..\..\src\Scry.Cli\Scry.Cli.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
     <ProjectReference Include="..\..\samples\Scry.SampleHost\Scry.SampleHost.csproj" ReferenceOutputAssembly="false" />
-    <!-- Modern-TFM only: this sample is not multi-targeted, so a net472 leg cannot reference it. -->
+    <!-- Modern-TFM only: these samples are not multi-targeted, so a net472 leg cannot reference them. -->
     <ProjectReference Include="..\..\samples\Scry.SampleWorker\Scry.SampleWorker.csproj"
+                      ReferenceOutputAssembly="false"
+                      Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
+    <ProjectReference Include="..\..\samples\Scry.AttachTarget\Scry.AttachTarget.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
   </ItemGroup>
 
   <!--
-    The desktop samples are launched as separate processes by SampleIntegrationTests rather than
-    referenced, so they are built through an MSBuild task instead of a ProjectReference.
+    These samples are launched as separate processes by SampleIntegrationTests and
+    AttachIntegrationTests rather than referenced, so they are built through an MSBuild task
+    instead of a ProjectReference. Scry.AttachWpfTarget in particular must not be referenced:
+    the point of it is that it has no Scry reference at all.
 
     RemoveProperties="TargetFramework" is load-bearing: the MSBuild task otherwise inherits this
-    project's current global TargetFramework, so the net472 inner build would try to build these
-    net9.0-windows samples as net472 and fail with NETSDK1136. The target is also scoped to the
-    modern leg so the samples are not built twice, once per inner build.
+    project's current global TargetFramework, so the net472 inner build would try to build the
+    net9.0-windows samples as net472 and fail with NETSDK1136 (and the modern leg would try to
+    build the net472-only attach target as net9.0). The target is also scoped to the modern leg so
+    the samples are not built twice, once per inner build.
   -->
   <Target Name="BuildDesktopSamples"
           BeforeTargets="Build"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(TargetFramework)' == '$(ScryModernTargetFramework)'">
     <MSBuild
-      Projects="..\..\samples\Scry.SampleWpf\Scry.SampleWpf.csproj;..\..\samples\Scry.SampleWinForms\Scry.SampleWinForms.csproj"
+      Projects="..\..\samples\Scry.SampleWpf\Scry.SampleWpf.csproj;..\..\samples\Scry.SampleWinForms\Scry.SampleWinForms.csproj;..\..\samples\Scry.AttachWpfTarget\Scry.AttachWpfTarget.csproj"
       Targets="Build"
       BuildInParallel="true"
       RemoveProperties="TargetFramework"

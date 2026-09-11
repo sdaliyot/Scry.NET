@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 #endif
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Scripting.Hosting;
 using Scry.Contracts;
 
 namespace Scry.Runtime;
@@ -237,6 +238,31 @@ internal sealed class AssemblyCatalog
         return references;
     }
 
+    /// <summary>
+    /// Builds the Roslyn loader used for evaluate/execute. Deduplicates by simple name, keeping the
+    /// highest version: a long-lived host can have two versions of the same assembly loaded side by
+    /// side (System.Text.Json 4.x alongside 9.x is the common case when attaching), and registering
+    /// both leaves script type resolution ambiguous. GetMetadataReferences groups by FullName
+    /// instead, because there distinct versions are legitimate compile references; here only one can
+    /// win.
+    /// </summary>
+    public InteractiveAssemblyLoader CreateExecutionAssemblyLoader()
+    {
+        var loader = new InteractiveAssemblyLoader();
+        var candidates = LoadedAssemblies()
+            .Where(IsExecutionCompatible)
+            .GroupBy(assembly => assembly.GetName().Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(assembly => assembly.GetName().Version ?? new Version(0, 0))
+                .First());
+        foreach (var assembly in candidates)
+        {
+            loader.RegisterDependency(assembly);
+        }
+
+        return loader;
+    }
+
     private Assembly LoadDefault(string path)
     {
         var existing = LoadedAssemblies().FirstOrDefault(assembly =>
@@ -254,7 +280,7 @@ internal sealed class AssemblyCatalog
 #if NETFRAMEWORK
         throw new ScryOperationException(
             "load_policy_not_supported",
-            "The isolated load policy is unavailable on .NET Framework 4.8; only the default AppDomain is supported.");
+            "The isolated load policy is unavailable on .NET Framework; only the default AppDomain is supported.");
 #else
         lock (_gate)
         {
@@ -496,5 +522,24 @@ internal sealed class AssemblyCatalog
 #endif
     }
 
-    private static bool IsExecutionCompatible(Assembly assembly) => IsDefaultContext(assembly);
+    private static bool IsExecutionCompatible(Assembly assembly)
+    {
+#if NETFRAMEWORK
+        // .NET Framework has a single default AppDomain and no load contexts, so there is no
+        // context to compare against. Accept any assembly Roslyn could actually reference:
+        // file-backed, not generated at run time, and not metadata-only. This deliberately does
+        // not accept everything loaded - a large host has hundreds of assemblies, and registering
+        // dynamic or locationless ones as interactive dependencies is pointless and slow.
+        return !assembly.IsDynamic
+            && !assembly.ReflectionOnly
+            && TryGetLocation(assembly) is not null;
+#else
+        // An injected payload is loaded into its own component context rather than Default, so
+        // accept this runtime's own context too - otherwise execution would see a different
+        // assembly set when attached than when embedded.
+        var context = AssemblyLoadContext.GetLoadContext(assembly);
+        var runtimeContext = AssemblyLoadContext.GetLoadContext(typeof(AssemblyCatalog).Assembly);
+        return context == AssemblyLoadContext.Default || context == runtimeContext;
+#endif
+    }
 }
