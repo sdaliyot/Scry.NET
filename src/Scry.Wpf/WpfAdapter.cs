@@ -53,6 +53,12 @@ public static class WpfAgentBuilderExtensions
     private static void Register(AgentBuilder builder, WpfAdapter adapter)
     {
         builder.RegisterValue("wpf", adapter, "Dispatcher-marshalled WPF inspection service.");
+
+        // Lets evaluate/execute opt into the dispatcher with "marshal": "ui", so a submission can
+        // touch DependencyObjects instead of failing VerifyAccess. Double await: InvokeAsync hands
+        // back a Task whose result is the submission's own Task.
+        builder.UseExecutionMarshaller(async (callback, cancellationToken) =>
+            await await adapter.Marshaller.InvokeAsync(callback, cancellationToken).ConfigureAwait(false));
         builder.RegisterOperation(
             "wpf.snapshot",
             async (arguments, cancellationToken) =>
@@ -189,6 +195,12 @@ public sealed class WpfAdapter
     private readonly Application? _application;
     private readonly IReadOnlyDictionary<string, DependencyObject> _registeredRoots;
     private readonly WpfAdapterOptions _options;
+
+    /// <summary>
+    /// The dispatcher every projection is marshalled through, exposed so registration can reuse it
+    /// as the endpoint's execution marshaller.
+    /// </summary>
+    internal WpfDispatcher Marshaller => _dispatcher;
 
     internal WpfAdapter(
         Dispatcher dispatcher,

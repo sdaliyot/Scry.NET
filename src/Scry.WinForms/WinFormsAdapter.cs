@@ -27,6 +27,11 @@ public static class WinFormsAgentBuilderExtensions
             "winforms",
             adapter,
             "Thread-marshalled Windows Forms inspection service.");
+
+        // See Scry.Wpf: lets evaluate/execute opt into the owner control's thread with
+        // "marshal": "ui" instead of failing the Control.InvokeRequired check.
+        builder.UseExecutionMarshaller(async (callback, cancellationToken) =>
+            await await adapter.Marshaller.InvokeAsync(callback, cancellationToken).ConfigureAwait(false));
         builder.RegisterOperation(
             "winforms.snapshot",
             async (arguments, cancellationToken) =>
@@ -107,6 +112,12 @@ public sealed class WinFormsAdapter
     private readonly WinFormsDispatcher _dispatcher;
     private readonly IReadOnlyDictionary<string, Control> _registeredRoots;
     private readonly WinFormsAdapterOptions _options;
+
+    /// <summary>
+    /// The owner-thread dispatcher every projection is marshalled through, exposed so registration
+    /// can reuse it as the endpoint's execution marshaller.
+    /// </summary>
+    internal WinFormsDispatcher Marshaller => _dispatcher;
 
     internal WinFormsAdapter(
         Control dispatcherOwner,

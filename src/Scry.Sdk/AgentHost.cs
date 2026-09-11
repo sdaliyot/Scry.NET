@@ -98,6 +98,17 @@ public sealed class AgentBuilder
             description);
     }
 
+    /// <summary>
+    /// Lets evaluate/execute accept <c>"marshal": "ui"</c> by supplying the thread to run on. The
+    /// WPF and Windows Forms adapters call this for you; register it directly only for a host with
+    /// its own single-threaded context.
+    /// </summary>
+    public AgentBuilder UseExecutionMarshaller(ExecutionMarshaller marshaller)
+    {
+        Configuration.SetExecutionMarshaller(marshaller);
+        return this;
+    }
+
     public AgentBuilder RegisterJobOperation(
         string name,
         Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,

@@ -58,6 +58,16 @@ public sealed class RuntimeHostOptions
     }
 }
 
+/// <summary>
+/// Runs a submission on a thread the host nominates - in practice a UI thread - and returns its
+/// result. Deliberately framework-agnostic: the runtime never references a UI framework, so the
+/// dispatcher is supplied by whoever owns one. The optional WPF and Windows Forms adapters register
+/// an implementation over the dispatcher they already hold.
+/// </summary>
+public delegate Task<object?> ExecutionMarshaller(
+    Func<Task<object?>> callback,
+    CancellationToken cancellationToken);
+
 public sealed class AgentConfiguration
 {
     private readonly Dictionary<string, RegisteredRoot> _roots = new(StringComparer.Ordinal);
@@ -67,6 +77,27 @@ public sealed class AgentConfiguration
     public IReadOnlyDictionary<string, RegisteredRoot> Roots => _roots;
 
     public IReadOnlyDictionary<string, RegisteredOperation> Operations => _operations;
+
+    /// <summary>
+    /// Null unless the host registered one, in which case evaluate/execute accept
+    /// <see cref="ExecutionMarshalTargets.UiThread"/>.
+    /// </summary>
+    public ExecutionMarshaller? ExecutionMarshaller { get; private set; }
+
+    public void SetExecutionMarshaller(ExecutionMarshaller marshaller)
+    {
+        if (marshaller is null)
+        {
+            throw new ArgumentNullException(nameof(marshaller));
+        }
+
+        if (ExecutionMarshaller is not null)
+        {
+            throw new InvalidOperationException("An execution marshaller is already registered.");
+        }
+
+        ExecutionMarshaller = marshaller;
+    }
 
     public void AddRoot(string name, Func<object?> valueFactory, string? description = null)
     {

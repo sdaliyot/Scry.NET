@@ -47,7 +47,11 @@ internal sealed class OperationDispatcher(
         target,
         protocolVersion = ProtocolConstants.Version,
         operations = ProtocolConstants.CoreCapabilities,
-        features = ProtocolConstants.FeatureCapabilities,
+        features = configuration.ExecutionMarshaller is null
+            ? ProtocolConstants.FeatureCapabilities
+            : ProtocolConstants.FeatureCapabilities
+                .Concat(new[] { ProtocolConstants.UiThreadMarshallingFeature })
+                .ToArray(),
         registeredOperations = configuration.DescribeOperations()
             .Select(item => new { item.Name, item.Description })
             .OrderBy(item => item.Name, StringComparer.Ordinal)

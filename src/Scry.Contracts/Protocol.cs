@@ -21,6 +21,12 @@ public static class ProtocolConstants
     public static IReadOnlyList<string> FeatureCapabilities { get; } = Array.AsReadOnly(
         new[] { "bounded-value-projection" });
 
+    /// <summary>
+    /// Advertised in a capabilities response only when the host registered an execution marshaller,
+    /// so a client can tell whether "marshal": "ui" will be accepted before sending a submission.
+    /// </summary>
+    public const string UiThreadMarshallingFeature = "ui-thread-marshalling";
+
     public static IReadOnlyList<string> AllCapabilities { get; } =
         CoreCapabilities.Concat(FeatureCapabilities).ToArray();
 }

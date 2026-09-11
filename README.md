@@ -59,3 +59,17 @@ using var host = AgentHost.Start(builder => builder.UseWinForms(
 ```
 
 The adapters register `wpf.*` or `winforms.*` snapshot, wait, assertion, and screenshot operations. Their projections are deliberately bounded and framework-specific. WPF visual and logical trees are separate views; WinForms exposes managed controls, open/owned forms, tool strips and menus, and bindings. Neither adapter claims to represent owner-drawn pixels, WebView2/ActiveX content, native child windows, popups/separate HWNDs, or out-of-process surfaces completely.
+
+## Running a submission on the UI thread
+
+`evaluate` and `execute` run on whichever endpoint thread serves the request, which is **not** the UI thread. A submission that touches a `DependencyObject` or a `Control` therefore fails with `InvalidOperationException: The calling thread cannot access this object because a different thread owns it`. That is WPF's and WinForms' own thread affinity, not an endpoint restriction.
+
+Add `"marshal": "ui"` to run the whole submission on the UI thread instead:
+
+```powershell
+scry evaluate --descriptor <path> --json '{"source":"System.Windows.Application.Current.MainWindow.Title","marshal":"ui"}'
+```
+
+Registering `UseWpf` or `UseWinForms` enables this; a capabilities response lists `ui-thread-marshalling` when it is available. Without a marshaller the request is refused with `marshal_target_unavailable` rather than failing later with a cross-thread exception, and an unrecognised target is refused with `marshal_target_not_supported`.
+
+Two consequences worth knowing. The submission **blocks the UI thread** for its duration, so a long-running or looping script freezes the target, and `TimeoutMilliseconds` cannot interrupt work already running on that thread — keep marshalled submissions short. And the submission both *starts* and *resumes* there: a marshalled script that awaits comes back to the UI thread rather than falling onto the thread pool mid-way.

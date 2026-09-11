@@ -83,6 +83,46 @@ builder.UseWinForms(
 
 Both adapters also expose typed `WpfAdapter`/`WinFormsAdapter` services and condition/result models for reusable in-process test code. Maximum depth/node counts, wait defaults, and screenshot dimensions and encoded byte sizes are configurable. A negative assertion is inconclusive when its bounded projection is truncated.
 
+### UI-thread execution marshalling
+
+`evaluate` and `execute` run on the endpoint thread serving the request. WPF and WinForms objects are thread-affine, so a submission that touches one throws `InvalidOperationException` from `Dispatcher.VerifyAccess` or the `Control.InvokeRequired` check. Setting `Marshal` to `"ui"` on the request (`ExecutionMarshalTargets.UiThread`) runs the submission on the UI thread instead:
+
+```json
+{ "source": "System.Windows.Application.Current.MainWindow.Title", "marshal": "ui" }
+```
+
+Without the flag, the same read has to marshal itself, which is the code the flag replaces:
+
+```csharp
+// equivalent to "marshal": "ui", written by hand inside an unmarshalled submission
+System.Windows.Application.Current.Dispatcher.Invoke(
+    new System.Func<string>(() => System.Windows.Application.Current.MainWindow.Title))
+```
+
+That hand-written form marshals one expression. The flag marshals the whole submission, so every statement — and every continuation after an `await` — runs on the UI thread, and no part of a multi-statement `execute` runs off it.
+
+`Scry.Runtime` owns no UI framework reference, so it does not resolve a dispatcher itself. The host supplies one as an `ExecutionMarshaller`:
+
+```csharp
+public delegate Task<object?> ExecutionMarshaller(
+    Func<Task<object?>> callback,
+    CancellationToken cancellationToken);
+```
+
+`UseWpf` and `UseWinForms` register an implementation over the dispatcher they already hold, so enabling an adapter is all that is required:
+
+```csharp
+// what UseWpf registers for you
+builder.UseExecutionMarshaller(async (callback, cancellationToken) =>
+    await await adapter.Marshaller.InvokeAsync(callback, cancellationToken).ConfigureAwait(false));
+```
+
+The double `await` is deliberate: `InvokeAsync` returns a task whose result is the submission's own task. `ExecutionEngine` does not apply `ConfigureAwait(false)` inside the marshalled callback, so the dispatcher's `SynchronizationContext` is captured and awaited continuations resume on the UI thread. Unmarshalled there is no context to capture, so that path is unchanged.
+
+A host with its own single-threaded context can call `UseExecutionMarshaller` directly without an adapter; only one marshaller may be registered per host. A capabilities response advertises `ui-thread-marshalling` when one is present. `marshal` is rejected up front — `marshal_target_unavailable` when no marshaller is registered, `marshal_target_not_supported` for an unrecognised target — rather than being allowed to fail later as an opaque cross-thread exception.
+
+Two operational limits apply. The submission holds the UI thread for its duration, so the target's UI is unresponsive until it completes, and `TimeoutMilliseconds` observes cooperative cancellation only: it cannot interrupt work already executing on that thread. Prefer short, targeted marshalled submissions, and use the bounded `wpf.*`/`winforms.*` operations for anything that polls or waits.
+
 WPF visual and logical snapshots are intentionally distinct: the visual view can omit logical-only values and unopened template or popup content, while the logical view can omit template-generated visuals. WinForms projects managed `Control` children, `Application.OpenForms`, owned-form metadata, `ToolStrip`/menu items, and bindings. Owner-drawn pixels, WebView2, ActiveX, `HwndHost`, native-child HWND internals, separate popup windows, protected content, and out-of-process surfaces can be absent. Screenshots use `RenderTargetBitmap` or `Control.DrawToBitmap` and return or throw explicit unsupported/failure results rather than claiming those surfaces were captured.
 
 ## Operations
