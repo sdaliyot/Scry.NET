@@ -7,7 +7,7 @@ Two hosting models are available:
 - **Embedded mode:** the target opts in with `Scry.Sdk`, registers described roots, values, and policy-tagged operations, and starts an `AgentHost`. Registrations can also be replaced or removed safely while the host is running.
 - **Attach mode (developer/test only):** `scry attach` loads an architecture-matched native bootstrap into an already-running managed process and starts the same `AgentHost` in its default AppDomain, so the target never references Scry.NET.
 
-The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md).
+The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, framework-neutral waits and assertions, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md).
 
 | Component | Supported targets |
 |---|---|
@@ -132,16 +132,47 @@ using var host = AgentHost.Start(builder => builder.UseWinForms(
 
 The adapters register `wpf.*` or `winforms.*` snapshot, wait, assertion, and screenshot operations as read-only, `ui-owner` helpers. Their projections are deliberately bounded and framework-specific. WPF visual and logical trees are separate views; WinForms exposes managed controls, open/owned forms, tool strips and menus, and bindings. Neither adapter claims to represent owner-drawn pixels, WebView2/ActiveX content, native child windows, popups/separate HWNDs, or out-of-process surfaces completely.
 
-## Running a submission on the UI thread
+## Waiting and asserting
 
-`evaluate` and `execute` run on whichever endpoint thread serves the request, which is **not** the UI thread. A submission that touches a `DependencyObject` or a `Control` therefore fails with `InvalidOperationException: The calling thread cannot access this object because a different thread owns it`. That is WPF's and WinForms' own thread affinity, not an endpoint restriction.
+`wait` and `assert` evaluate a C# expression and compare its result, with operators `isTrue`
+(the default), `equals`, `notEquals`, `contains`, `isNull` and `isNotNull`. They are
+framework-neutral, so they work in a console, service or worker target that has no UI tree at all,
+and they can assert on application state that the `wpf.*`/`winforms.*` conditions cannot see,
+because those only observe the bounded UI-tree projection.
 
-Add `"marshal": "ui"` to run the whole submission on the UI thread instead:
+```powershell
+scry wait --target app --request wait-loaded.json
+scry assert --target app --request assert-count.json
+```
+
+`wait` polls until the condition holds or `timeoutMilliseconds` elapses, and reports a timeout as a
+successful response carrying `satisfied: false` — read the flag, do not infer it from the exit code.
+`assert` evaluates once and fails the request with `assertion_failed` and a description of the
+comparison. Use `wait` to gate, `assert` to fail.
+
+## Reaching UI-owned state
+
+WPF and WinForms objects have thread affinity, and requests are served on a non-UI thread. So
+`get`, `set`, `invoke`, `inspect`, `enumerate`, `evaluate`, `execute`, `wait` and `assert` all fail
+with `InvalidOperationException: The calling thread cannot access this object because a different
+thread owns it` when they touch a `DependencyObject` or a `Control`. That is WPF's and WinForms' own
+rule, not an endpoint restriction.
+
+Add `"marshal": "ui"` to run on the target's UI thread instead:
 
 ```powershell
 scry evaluate --descriptor <path> --json '{"source":"System.Windows.Application.Current.MainWindow.Title","marshal":"ui"}'
 ```
 
-Registering `UseWpf` or `UseWinForms` enables this; a capabilities response lists `ui-thread-marshalling` when it is available. Without a marshaller the request is refused with `marshal_target_unavailable` rather than failing later with a cross-thread exception, and an unrecognised target is refused with `marshal_target_not_supported`.
+Registering `UseWpf` or `UseWinForms`, or attaching with `--adapters`, enables this; a capabilities
+response lists `ui-thread-marshalling` when it is available. Without a marshaller the request is
+refused with `marshal_target_unavailable` rather than failing later with a cross-thread exception,
+and an unrecognised target is refused with `marshal_target_not_supported`.
 
-Two consequences worth knowing. The submission **blocks the UI thread** for its duration, so a long-running or looping script freezes the target, and `TimeoutMilliseconds` cannot interrupt work already running on that thread — keep marshalled submissions short. And the submission both *starts* and *resumes* there: a marshalled script that awaits comes back to the UI thread rather than falling onto the thread pool mid-way.
+Two consequences worth knowing. A marshalled `evaluate`/`execute` **occupies the UI thread** for the
+whole submission, so a long-running or looping script freezes the target, and `TimeoutMilliseconds`
+cannot interrupt work already running there — keep marshalled submissions short. Such a submission
+both *starts* and *resumes* there: a marshalled script that awaits comes back to the UI thread rather
+than falling onto the thread pool mid-way. `wait` is the exception by design: it marshals each
+evaluation rather than the polling loop, so a long marshalled wait never holds the UI thread between
+attempts.

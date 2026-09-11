@@ -14,7 +14,8 @@ public static class ProtocolConstants
         new[]
         {
             "capabilities", "roots", "inspect", "get", "set", "invoke", "enumerate", "release",
-            "evaluate", "execute", "load-assembly", "list-assemblies", "find-types", "describe-type",
+            "evaluate", "execute", "wait", "assert",
+            "load-assembly", "list-assemblies", "find-types", "describe-type",
             "job.start", "job.status", "job.wait", "job.cancel", "job.logs"
         });
 

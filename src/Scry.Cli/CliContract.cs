@@ -160,6 +160,34 @@ internal static class CliContract
             "Get-Content statements.csx | scry execute --target app",
             "ExecutionResult."),
         Target(
+            "wait",
+            "wait",
+            "Poll a C# condition until it holds or the timeout elapses. Framework-neutral: works in console, service and worker targets that have no UI tree, and can assert on view-model state that the wpf.*/winforms.* conditions cannot see.",
+            [
+                F("source", "string", true, "C# expression to evaluate on each attempt."),
+                F("operator", "isTrue|equals|notEquals|contains|isNull|isNotNull", false, "Comparison applied to the result; defaults to isTrue."),
+                F("expected", "string|number|boolean|null", false, "Operand for equals, notEquals and contains."),
+                F("timeoutMilliseconds", "number", false, "Total budget; defaults to 5000."),
+                F("pollIntervalMilliseconds", "number", false, "Delay between attempts; defaults to 100."),
+                F("imports", "string[]", false, "Extra namespaces for the expression."),
+                F("references", "string[]", false, "Extra assembly references for the expression."),
+                F("marshal", "ui", false, "Run each evaluation on the host UI thread. Marshals the evaluations, not the polling loop, so waiting never occupies the UI thread between attempts.")
+            ],
+            "ConditionResult with satisfied, attempts, elapsedMilliseconds, value and description. A timeout returns satisfied=false rather than failing; use assert when a miss should fail."),
+        Target(
+            "assert",
+            "assert",
+            "Evaluate a C# condition once and fail the request when it does not hold.",
+            [
+                F("source", "string", true, "C# expression to evaluate."),
+                F("operator", "isTrue|equals|notEquals|contains|isNull|isNotNull", false, "Comparison applied to the result; defaults to isTrue."),
+                F("expected", "string|number|boolean|null", false, "Operand for equals, notEquals and contains."),
+                F("imports", "string[]", false, "Extra namespaces for the expression."),
+                F("references", "string[]", false, "Extra assembly references for the expression."),
+                F("marshal", "ui", false, "Run the evaluation on the host UI thread.")
+            ],
+            "ConditionResult on success; an assertion_failed error with the comparison description otherwise."),
+        Target(
             "load-assembly",
             "load-assembly",
             "Load an assembly explicitly into the target.",
@@ -420,6 +448,7 @@ internal static class CliContract
                   Discovery:  discover, attach, capabilities, roots
                   Objects:    inspect, get, set, invoke, enumerate, release
                   Execution:  evaluate, execute
+                  Validation: wait, assert
                   Assemblies: load-assembly, list-assemblies, find-types, describe-type
                   Jobs:       jobs start, jobs status, jobs wait, jobs cancel, jobs logs
                   Flows:      scenario, batch

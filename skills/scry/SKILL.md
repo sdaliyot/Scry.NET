@@ -296,6 +296,79 @@ later. Release handles owned by persistent sessions:
 scry release --target <target-id> --session <session-id> --request release.json
 ```
 
+## Framework-neutral waits and assertions
+
+`wait` and `assert` evaluate a C# expression and compare its result. Prefer them over polling by
+hand, and over `wpf.wait`/`winforms.wait` whenever the thing you care about is application state
+rather than a rendered element: the adapter conditions only see the bounded UI-tree projection,
+while these see anything an expression can reach - view models, services, counters, a worker's
+queue depth. They are the only wait/assert available in a console, service, or worker target.
+
+Request fields: `source` (required), `operator` (`isTrue` by default, plus `equals`, `notEquals`,
+`contains`, `isNull`, `isNotNull`), `expected` (a string, number, boolean, or null - required for
+`equals`, `notEquals`, and `contains`), `timeoutMilliseconds` (default 5000, `wait` only),
+`pollIntervalMilliseconds` (default 100, `wait` only), `imports`, `references`, and `marshal`.
+
+Choose between them by what a miss should mean:
+
+- `wait` returns `satisfied: false` on timeout as a **successful** response. Read
+  `satisfied`; do not treat exit code 0 as the condition having held.
+- `assert` fails the request with `assertion_failed` and a message describing the comparison. Use
+  it for the check you want to surface as a failure.
+
+```json
+{
+  "source": "((MyApp.MainViewModel)Context.Roots[\"mainViewModel\"]).IsLoaded",
+  "timeoutMilliseconds": 10000,
+  "pollIntervalMilliseconds": 100
+}
+```
+
+```powershell
+scry wait --target <target-id> --request wait-loaded.json --correlation load-gate
+scry assert --target <target-id> --request assert-count.json
+```
+
+Results carry `satisfied`, `attempts`, `elapsedMilliseconds`, the projected `value`, and a
+`description`. `attempts` is worth checking when a wait passes suspiciously fast - it tells you
+whether the condition was already true on the first evaluation.
+
+Expressions are compiled against the target's loaded assemblies, so cast `Context.Roots[...]`
+(typed `object`) to a type the target actually has, or call members available on `object`. A
+`compilation_failed` error here means the expression, not the condition, is wrong.
+
+## Reaching UI-owned state: `marshal`
+
+WPF and WinForms objects have thread affinity, and endpoint requests are served on a non-UI
+thread. So `get`, `set`, `invoke`, `inspect`, `enumerate`, `evaluate`, `execute`, `wait`, and
+`assert` all fail with `operation_failed` and "The calling thread cannot access this object because
+a different thread owns it" when they touch a `DependencyObject` or a `Control`. That is the
+framework's own rule, not an endpoint restriction.
+
+Add `"marshal": "ui"` to run on the target's UI thread instead:
+
+```json
+{ "reference": { "...": "..." }, "member": "Title", "marshal": "ui" }
+```
+
+Check availability before relying on it: a `capabilities` response lists `ui-thread-marshalling`
+only when the target registered a marshaller. It is registered by `UseWpf`/`UseWinForms` in an
+embedded host, or by `scry attach --adapters wpf|winforms`. Without one the request is refused up
+front with `marshal_target_unavailable` rather than failing later with a cross-thread exception, and
+an unrecognised target gives `marshal_target_not_supported`.
+
+Two things to keep in mind:
+
+- A marshalled `evaluate`/`execute` **occupies the UI thread for the whole submission**, and
+  `timeoutMilliseconds` cannot interrupt work already running there. Keep marshalled submissions
+  short; never loop or sleep inside one.
+- `wait` marshals each individual evaluation, not the polling loop, so a marshalled wait does not
+  hold the UI thread between attempts. Long `timeoutMilliseconds` on a marshalled `wait` is fine;
+  long-running work inside a marshalled `evaluate` is not.
+
+For a bulk read of UI structure, prefer `wpf.snapshot`/`winforms.snapshot`: they marshal internally,
+return a bounded projection in one request, and do not need `marshal`.
+
 ## WPF recipe
 
 The target must advertise `wpf.snapshot`, `wpf.wait`, `wpf.assert`, and
@@ -453,7 +526,10 @@ Scry.NET does not require a desktop UI. For a service, worker, console app, or t
 3. Inspect the service/provider/state root.
 4. Prefer a registered health, reset, drain, reindex, or diagnostic operation.
 5. Enumerate bounded queues or collections page by page.
-6. Verify the operation through a state root or registered assertion operation.
+6. Gate on asynchronous work with `wait`, and verify the outcome with `assert` - these are the
+   deterministic validation primitives available here, since there is no UI tree to query and the
+   `wpf.*`/`winforms.*` conditions do not apply. No `marshal` is needed in a non-UI target.
+7. Verify the operation through a state root or registered assertion operation.
 
 Example health request:
 

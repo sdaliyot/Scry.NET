@@ -108,7 +108,9 @@ internal sealed class ExecutionEngine
         CancellationToken cancellationToken)
     {
         Validate(request);
-        var marshalToUiThread = ResolveMarshalTarget(request);
+        var marshalToUiThread = MarshalTarget.Resolve(
+            request.Marshal,
+            _configuration.ExecutionMarshaller);
         var timeout = request.TimeoutMilliseconds ?? _options.DefaultExecutionMilliseconds;
         using var timeoutSource = new CancellationTokenSource();
         timeoutSource.CancelAfter(TimeSpan.FromMilliseconds(timeout));
@@ -187,38 +189,6 @@ internal sealed class ExecutionEngine
         }
     }
 
-    /// <summary>
-    /// Returns true when the submission must run on the host's UI thread. Rejects an unknown target,
-    /// and rejects the UI target on a host with no marshaller - a non-UI process, or a UI process
-    /// that never registered an adapter - rather than letting the submission fail later with a
-    /// cross-thread exception that says nothing about the cause.
-    /// </summary>
-    private bool ResolveMarshalTarget(ExecutionRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.Marshal))
-        {
-            return false;
-        }
-
-        if (!string.Equals(request.Marshal, ExecutionMarshalTargets.UiThread, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ScryOperationException(
-                "marshal_target_not_supported",
-                $"marshal '{request.Marshal}' is not supported. The only supported target is " +
-                $"'{ExecutionMarshalTargets.UiThread}'.");
-        }
-
-        if (_configuration.ExecutionMarshaller is null)
-        {
-            throw new ScryOperationException(
-                "marshal_target_unavailable",
-                "This target has no execution marshaller, so submissions cannot be run on a UI " +
-                "thread. Register one with AgentBuilder.UseExecutionMarshaller, or use the WPF or " +
-                "Windows Forms adapter, which registers one for you.");
-        }
-
-        return true;
-    }
 
     private void Validate(ExecutionRequest request)
     {

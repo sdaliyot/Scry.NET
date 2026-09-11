@@ -267,6 +267,34 @@ Current limits:
 
 All non-handshake requests use the negotiated session. Subjects are selected with either `"root":"name"` or `"reference":{...}`. `inspect`, `get`, `set`, and `invoke` accept `"includeNonPublic":true` as an explicit opt-in.
 
+`inspect`, `get`, `set`, `invoke` and `enumerate` also accept `"marshal":"ui"`, because they read or
+mutate live objects and so are subject to UI thread affinity. It is applied centrally in
+`OperationDispatcher.DispatchAsync` rather than threaded through each operation, and resolved by the
+same `MarshalTarget` helper `evaluate`/`execute` use, so every operation accepts identical targets
+and produces identical errors. The metadata operations (`load-assembly`, `list-assemblies`,
+`find-types`, `describe-type`) have no thread affinity and do not take it.
+
+### Framework-neutral conditions
+
+`wait` and `assert` take a `ConditionRequest`: a C# expression plus an operator from
+`ConditionOperators` (`isTrue`, `equals`, `notEquals`, `contains`, `isNull`, `isNotNull`). They are
+deliberately expression-based rather than member-path based, because that is the only shape that
+works identically in a non-UI target - which has no UI tree to query - while still reaching
+view-model state in a desktop target, which the adapter conditions cannot do because they only
+observe the bounded UI-tree projection.
+
+Both reuse `evaluate` wholesale, including its `marshal` handling. `wait` therefore marshals each
+individual evaluation rather than the polling loop, so a long marshalled wait never occupies the UI
+thread between attempts; it is excluded from the central marshalling above for exactly that reason.
+
+Comparison runs against the raw CLR value, not its JSON projection, so a bounded preview can never
+change the verdict. `expected` must be a string, number, boolean or null; a structured operand is
+refused with `invalid_request` rather than silently compared against a preview string.
+
+`wait` reports a timeout as a successful `ConditionResult` with `satisfied: false`, matching the
+`wpf.wait`/`winforms.wait` convention. `assert` raises `assertion_failed` so a failed check is a
+failed request with a non-zero exit code.
+
 | Operation | Important payload fields |
 |---|---|
 | `capabilities` | none |
@@ -277,8 +305,10 @@ All non-handshake requests use the negotiated session. Subjects are selected wit
 | `invoke` | root/reference + member + arguments, or registeredOperation + arguments; asReference |
 | `enumerate` | root/reference, offset, limit (1-1000), asReferences |
 | `release` | handleId or handleIds |
-| `evaluate` | source, imports, references, timeoutMilliseconds |
-| `execute` | source, imports, references, timeoutMilliseconds |
+| `evaluate` | source, imports, references, timeoutMilliseconds, marshal |
+| `execute` | source, imports, references, timeoutMilliseconds, marshal |
+| `wait` | source, operator, expected, timeoutMilliseconds, pollIntervalMilliseconds, imports, references, marshal |
+| `assert` | source, operator, expected, imports, references, marshal |
 | `load-assembly` | absolute path, loadPolicy (`default` or `isolated`) |
 | `list-assemblies` | none |
 | `find-types` | query, assembly, loadContext, namespace, includeNonPublic, limit |

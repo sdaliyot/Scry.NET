@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using Scry.Contracts;
@@ -18,7 +20,49 @@ internal sealed class OperationDispatcher(
         IncludeFields = true
     };
 
+    /// <summary>
+    /// Operations that read or mutate live target objects, and so can hit UI thread affinity. They
+    /// accept the same <c>marshal</c> field <c>evaluate</c>/<c>execute</c> take, applied centrally
+    /// here rather than threaded through each one.
+    /// <para>
+    /// <c>evaluate</c>, <c>execute</c>, <c>wait</c> and <c>assert</c> are absent on purpose:
+    /// execution marshals the whole submission itself, and wait/assert marshal each individual
+    /// evaluation so that polling never occupies the UI thread between attempts.
+    /// </para>
+    /// </summary>
+    private const int DefaultWaitTimeoutMilliseconds = 5000;
+    private const int DefaultPollIntervalMilliseconds = 100;
+
+    private static readonly HashSet<string> MarshallableOperations =
+        new(StringComparer.Ordinal) { "inspect", "get", "set", "invoke", "enumerate" };
+
     public async ValueTask<object?> DispatchAsync(
+        string operation,
+        JsonElement payload,
+        SessionState session,
+        OperationExecutionContext context)
+    {
+        if (!MarshallableOperations.Contains(operation))
+        {
+            return await DispatchCoreAsync(operation, payload, session, context).ConfigureAwait(false);
+        }
+
+        var marshal = MarshalTarget.Resolve(
+            OptionalString(payload, "marshal"),
+            configuration.ExecutionMarshaller);
+        if (!marshal)
+        {
+            return await DispatchCoreAsync(operation, payload, session, context).ConfigureAwait(false);
+        }
+
+        // Resolve() guarantees a marshaller here.
+        var marshaller = configuration.ExecutionMarshaller!;
+        return await marshaller(
+            async () => await DispatchCoreAsync(operation, payload, session, context).ConfigureAwait(false),
+            context.CancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<object?> DispatchCoreAsync(
         string operation,
         JsonElement payload,
         SessionState session,
@@ -35,6 +79,8 @@ internal sealed class OperationDispatcher(
             "release" => Release(payload, session),
             "evaluate" => await EvaluateAsync(payload, session, context.CancellationToken).ConfigureAwait(false),
             "execute" => await ExecuteAsync(payload, session, context.CancellationToken).ConfigureAwait(false),
+            "wait" => await WaitAsync(payload, session, context.CancellationToken).ConfigureAwait(false),
+            "assert" => await AssertAsync(payload, session, context.CancellationToken).ConfigureAwait(false),
             "load-assembly" => LoadAssembly(payload),
             "list-assemblies" => ListAssemblies(),
             "find-types" => FindTypes(payload),
@@ -667,6 +713,253 @@ internal sealed class OperationDispatcher(
         }
     }
 
+    /// <summary>
+    /// Polls a condition until it holds or the budget runs out. Returns an unsatisfied result
+    /// rather than an error on timeout, matching the <c>wpf.wait</c>/<c>winforms.wait</c>
+    /// convention; use <c>assert</c> when a miss should be a failure.
+    /// </summary>
+    private async ValueTask<object> WaitAsync(
+        JsonElement payload,
+        SessionState session,
+        CancellationToken cancellationToken)
+    {
+        var request = Deserialize<ConditionRequest>(payload);
+        var comparison = ConditionComparison.Parse(request);
+        var timeout = TimeSpan.FromMilliseconds(
+            request.TimeoutMilliseconds ?? DefaultWaitTimeoutMilliseconds);
+        var pollInterval = TimeSpan.FromMilliseconds(
+            request.PollIntervalMilliseconds ?? DefaultPollIntervalMilliseconds);
+        if (pollInterval <= TimeSpan.Zero)
+        {
+            throw new ScryOperationException(
+                "invalid_request",
+                "pollIntervalMilliseconds must be greater than zero.");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        var attempts = 0;
+        ConditionOutcome outcome;
+        while (true)
+        {
+            attempts++;
+            outcome = await EvaluateConditionAsync(request, comparison, session, cancellationToken)
+                .ConfigureAwait(false);
+            if (outcome.Satisfied || stopwatch.Elapsed >= timeout)
+            {
+                break;
+            }
+
+            // Don't overshoot the budget waiting to poll again.
+            var remaining = timeout - stopwatch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            await Task.Delay(
+                remaining < pollInterval ? remaining : pollInterval,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        stopwatch.Stop();
+        return new ConditionResult(
+            outcome.Satisfied,
+            attempts,
+            stopwatch.ElapsedMilliseconds,
+            Encode(outcome.Value, session),
+            comparison.Describe(outcome));
+    }
+
+    /// <summary>
+    /// Evaluates a condition once and fails the operation when it does not hold, so a failed
+    /// assertion is a failed request with a non-zero exit code rather than a success the caller has
+    /// to inspect.
+    /// </summary>
+    private async ValueTask<object> AssertAsync(
+        JsonElement payload,
+        SessionState session,
+        CancellationToken cancellationToken)
+    {
+        var request = Deserialize<ConditionRequest>(payload);
+        var comparison = ConditionComparison.Parse(request);
+        var stopwatch = Stopwatch.StartNew();
+        var outcome = await EvaluateConditionAsync(request, comparison, session, cancellationToken)
+            .ConfigureAwait(false);
+        stopwatch.Stop();
+        if (!outcome.Satisfied)
+        {
+            throw new ScryOperationException(
+                "assertion_failed",
+                comparison.Describe(outcome),
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["source"] = request.Source,
+                    ["operator"] = comparison.Operator
+                });
+        }
+
+        return new ConditionResult(
+            true,
+            1,
+            stopwatch.ElapsedMilliseconds,
+            Encode(outcome.Value, session),
+            comparison.Describe(outcome));
+    }
+
+    private async ValueTask<ConditionOutcome> EvaluateConditionAsync(
+        ConditionRequest request,
+        ConditionComparison comparison,
+        SessionState session,
+        CancellationToken cancellationToken)
+    {
+        // Reuses evaluate wholesale, including its marshal handling, so a condition can read
+        // UI-owned state with "marshal": "ui" without wait's polling loop ever running there.
+        var evaluation = new ExecutionRequest(
+            request.Source,
+            request.Imports,
+            request.References,
+            Marshal: request.Marshal);
+        var result = await execution
+            .EvaluateAsync(evaluation, session, cancellationToken)
+            .ConfigureAwait(false);
+        return new ConditionOutcome(comparison.Matches(result.Value), result.Value);
+    }
+
+    private readonly record struct ConditionOutcome(bool Satisfied, object? Value);
+
+    /// <summary>
+    /// A parsed condition comparison. Comparison happens against the raw CLR value rather than its
+    /// JSON projection, so a bounded preview never changes the verdict.
+    /// </summary>
+    private sealed class ConditionComparison
+    {
+        private ConditionComparison(string op, JsonElement? expected)
+        {
+            Operator = op;
+            Expected = expected;
+        }
+
+        public string Operator { get; }
+
+        private JsonElement? Expected { get; }
+
+        public static ConditionComparison Parse(ConditionRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Source))
+            {
+                throw new ScryOperationException("invalid_request", "source must be a non-empty expression.");
+            }
+
+            var op = string.IsNullOrWhiteSpace(request.Operator)
+                ? ConditionOperators.IsTrue
+                : request.Operator!;
+            var match = ConditionOperators.All.FirstOrDefault(
+                candidate => string.Equals(candidate, op, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                throw new ScryOperationException(
+                    "invalid_request",
+                    $"operator '{op}' is not supported. Supported operators: " +
+                    string.Join(", ", ConditionOperators.All) + ".");
+            }
+
+            var needsOperand =
+                match is ConditionOperators.EqualTo or ConditionOperators.NotEqualTo or ConditionOperators.Contains;
+            if (needsOperand && request.Expected is null)
+            {
+                throw new ScryOperationException(
+                    "invalid_request",
+                    $"operator '{match}' requires an 'expected' value.");
+            }
+
+            return new(match, request.Expected);
+        }
+
+        public bool Matches(object? value) => Operator switch
+        {
+            ConditionOperators.IsNull => value is null,
+            ConditionOperators.IsNotNull => value is not null,
+            ConditionOperators.IsTrue => value is true,
+            ConditionOperators.EqualTo => ValuesEqual(value, Expected!.Value),
+            ConditionOperators.NotEqualTo => !ValuesEqual(value, Expected!.Value),
+            ConditionOperators.Contains => Contains(value, Expected!.Value),
+            _ => false
+        };
+
+        public string Describe(ConditionOutcome outcome)
+        {
+            var actual = outcome.Value is null
+                ? "null"
+                : Convert.ToString(outcome.Value, CultureInfo.InvariantCulture) ?? outcome.Value.GetType().Name;
+            var verb = outcome.Satisfied ? "holds" : "does not hold";
+            return Expected is null
+                ? $"Condition {Operator} {verb}; the expression produced '{actual}'."
+                : $"Condition {Operator} {Expected.Value.ToString()} {verb}; the expression produced '{actual}'.";
+        }
+
+        /// <summary>
+        /// Compares a CLR value with a JSON operand without going through serialization, so
+        /// numeric widening (an int result against a JSON number) and string comparison behave the
+        /// way a caller writing JSON expects.
+        /// </summary>
+        private static bool ValuesEqual(object? value, JsonElement expected)
+        {
+            switch (expected.ValueKind)
+            {
+                case JsonValueKind.Null:
+                    return value is null;
+                case JsonValueKind.True:
+                    return value is true;
+                case JsonValueKind.False:
+                    return value is false;
+                case JsonValueKind.String:
+                    return value is not null &&
+                        string.Equals(
+                            Convert.ToString(value, CultureInfo.InvariantCulture),
+                            expected.GetString(),
+                            StringComparison.Ordinal);
+                case JsonValueKind.Number:
+                    if (value is null || value is bool || !expected.TryGetDouble(out var operand))
+                    {
+                        return false;
+                    }
+
+                    try
+                    {
+                        return Math.Abs(Convert.ToDouble(value, CultureInfo.InvariantCulture) - operand) < double.Epsilon;
+                    }
+                    catch (Exception exception) when (
+                        exception is InvalidCastException or FormatException or OverflowException)
+                    {
+                        return false;
+                    }
+
+                default:
+                    // Objects and arrays have no meaningful equality against a bounded projection;
+                    // say so rather than silently comparing previews.
+                    throw new ScryOperationException(
+                        "invalid_request",
+                        "expected must be a string, number, boolean, or null. Compare structured " +
+                        "values inside the expression instead.");
+            }
+        }
+
+        private static bool Contains(object? value, JsonElement expected)
+        {
+            if (expected.ValueKind != JsonValueKind.String)
+            {
+                throw new ScryOperationException(
+                    "invalid_request",
+                    $"operator '{ConditionOperators.Contains}' requires a string 'expected' value.");
+            }
+
+            var text = value is null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
+            // string.Contains(string, StringComparison) is .NET Core only.
+            return text is not null &&
+                text.IndexOf(expected.GetString() ?? string.Empty, StringComparison.Ordinal) >= 0;
+        }
+    }
+
     private static JsonElement RequiredProperty(JsonElement payload, string name) =>
         payload.TryGetProperty(name, out var value)
             ? value
@@ -675,6 +968,11 @@ internal sealed class OperationDispatcher(
     private static string RequiredString(JsonElement payload, string name) =>
         RequiredProperty(payload, name).GetString()
         ?? throw new ScryOperationException("invalid_request", $"Property '{name}' must be a string.");
+
+    private static string? OptionalString(JsonElement payload, string name) =>
+        payload.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static bool GetOptionalBoolean(JsonElement payload, string name) =>
         payload.TryGetProperty(name, out var value) && value.GetBoolean();

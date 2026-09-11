@@ -152,6 +152,80 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
         Assert.NotEmpty(snapshot.Roots);
     }
 
+    /// <summary>
+    /// The structured operations run on whichever endpoint thread serves the request, so reading a
+    /// property off a DependencyObject used to be impossible without falling back to evaluate.
+    /// They now accept the same <c>marshal</c> field execution takes. Asserted as an A/B, because
+    /// a test that only checked the marshalled call would pass even if marshalling did nothing.
+    /// </summary>
+    [Fact]
+    public async Task Structured_get_reaches_ui_owned_state_only_when_marshalled()
+    {
+        await using var host = AgentHost.Start(
+            builder => builder.UseWpf(
+                fixture.Application,
+                adapter => adapter.RegisterWindow("main", fixture.MainWindow)));
+        await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
+
+        // Read through the dispatcher: this test is subject to the very thread affinity it covers.
+        var expectedTitle = fixture.Application.Dispatcher.Invoke(() => fixture.MainWindow.Title);
+
+        var reference = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest(
+                "System.Windows.Application.Current.MainWindow",
+                Marshal: ExecutionMarshalTargets.UiThread));
+        Assert.True(reference.Success, reference.Error?.Message);
+        var window = reference.Result!.Value.GetProperty("value")
+            .Deserialize<RemoteValue>(ScryJson.Options)!
+            .Reference;
+        Assert.NotNull(window);
+
+        var unmarshalled = await client.RequestAsync(
+            "get",
+            new { reference = window, member = "Title" });
+        Assert.False(unmarshalled.Success);
+        Assert.Equal("operation_failed", unmarshalled.Error?.Code);
+        Assert.Contains("different thread", unmarshalled.Error!.Message);
+
+        var marshalled = await client.RequestAsync(
+            "get",
+            new { reference = window, member = "Title", marshal = ExecutionMarshalTargets.UiThread });
+        Assert.True(marshalled.Success, marshalled.Error?.Message);
+        var title = marshalled.Result!.Value.GetProperty("value")
+            .Deserialize<RemoteValue>(ScryJson.Options)!;
+        Assert.Equal("scalar", title.Kind);
+        Assert.Equal(expectedTitle, title.Value!.Value.GetString());
+    }
+
+    /// <summary>
+    /// wait marshals each evaluation rather than the polling loop, so a condition can read
+    /// UI-owned state without the wait occupying the UI thread between attempts.
+    /// </summary>
+    [Fact]
+    public async Task Wait_can_observe_ui_owned_state_through_marshalled_evaluations()
+    {
+        await using var host = AgentHost.Start(
+            builder => builder.UseWpf(
+                fixture.Application,
+                adapter => adapter.RegisterWindow("main", fixture.MainWindow)));
+        await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
+        var expectedTitle = fixture.Application.Dispatcher.Invoke(() => fixture.MainWindow.Title);
+
+        var response = await client.RequestAsync(
+            "wait",
+            new ConditionRequest(
+                "System.Windows.Application.Current.MainWindow.Title",
+                ConditionOperators.EqualTo,
+                Expected: JsonSerializer.SerializeToElement(expectedTitle, ScryJson.Options),
+                TimeoutMilliseconds: 5000,
+                PollIntervalMilliseconds: 50,
+                Marshal: ExecutionMarshalTargets.UiThread));
+
+        Assert.True(response.Success, response.Error?.Message);
+        Assert.True(response.Result!.Value.GetProperty("satisfied").GetBoolean());
+    }
+
     private static IEnumerable<WpfNode> Flatten(IEnumerable<WpfNode> roots)
     {
         foreach (var root in roots)
