@@ -6,7 +6,14 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!--
+      Only the modern leg is a tool. The .NET Framework leg exists so a net472 test project
+      can reference AttachService directly, and it would have no way to attach on its own
+      anyway: the payload and native helper are staged by the modern leg's build. Shipping
+      it as a library also gives consumers a .dll to reference rather than an .exe.
+    -->
+    <OutputType Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'">Exe</OutputType>
+    <OutputType Condition="'$(TargetFramework)' != '$(ScryModernTargetFramework)'">Library</OutputType>
     <!--
       Multi-targeted so a .NET Framework test project can attach with typed calls instead of
       shelling out to the CLI. Nothing here needs a modern BCL: nint/nuint are C# language
@@ -21,6 +28,11 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Scry.Tests" />
+  </ItemGroup>
+
+  <!-- Top-level statements need an entry point, which a library does not have. -->
+  <ItemGroup Condition="'$(TargetFramework)' != '$(ScryModernTargetFramework)'">
+    <Compile Remove="Program.cs" />
   </ItemGroup>
 
   <!--

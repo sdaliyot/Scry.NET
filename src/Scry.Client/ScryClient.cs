@@ -30,7 +30,7 @@ public sealed class ScryClient : IAsyncDisposable
         ConnectionDescriptor descriptor,
         string? sessionId = null,
         TimeSpan? timeout = null,
-        string clientName = "Scry.Sdk",
+        string clientName = "Scry.Client",
         bool ephemeralSession = false,
         CancellationToken cancellationToken = default)
     {
@@ -88,7 +88,7 @@ public sealed class ScryClient : IAsyncDisposable
         string descriptorPath,
         string? sessionId = null,
         TimeSpan? timeout = null,
-        string clientName = "Scry.Sdk",
+        string clientName = "Scry.Client",
         bool ephemeralSession = false,
         CancellationToken cancellationToken = default)
     {
