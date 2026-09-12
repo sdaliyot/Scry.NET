@@ -32,8 +32,8 @@
     <ProjectReference Include="..\..\src\Scry.Runtime\Scry.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Scry.Endpoint\Scry.Endpoint.csproj" />
     <ProjectReference Include="..\..\src\Scry.Client\Scry.Client.csproj" />
-    <ProjectReference Include="..\..\src\Scry.Injector\Scry.Injector.csproj"
-                      Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
+    <!-- Multi-targeted, so both test legs reference it and the net472 leg is actually exercised. -->
+    <ProjectReference Include="..\..\src\Scry.Injector\Scry.Injector.csproj" />
     <ProjectReference Include="..\..\src\Scry.Cli\Scry.Cli.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />

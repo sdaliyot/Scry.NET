@@ -1,4 +1,6 @@
-#if NET9_0_OR_GREATER
+// Runs on both target frameworks on purpose: these are pure detection and refusal checks
+// with no CLI and no injection, so they are what actually exercises the .NET Framework leg
+// of Scry.Injector rather than leaving it compiled but unproven.
 using Scry.Injector;
 
 namespace Scry.Tests;
@@ -64,4 +66,3 @@ public sealed class InjectorDetectionTests
         Assert.Equal(InjectionErrorCode.DetectionInconclusive, exception.Code);
     }
 }
-#endif

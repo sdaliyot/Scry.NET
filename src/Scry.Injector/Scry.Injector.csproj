@@ -7,7 +7,13 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>$(ScryModernTargetFramework)</TargetFramework>
+    <!--
+      Multi-targeted so a .NET Framework test project can attach with typed calls instead of
+      shelling out to the CLI. Nothing here needs a modern BCL: nint/nuint are C# language
+      aliases for IntPtr/UIntPtr, and SafeProcessHandle, RuntimeInformation.ProcessArchitecture
+      and XDocument all exist on net472.
+    -->
+    <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
     <AssemblyName>scry-injector</AssemblyName>
     <PackageId>Scry.Injector</PackageId>
     <Description>Windows attach-mode injector for Scry.NET.</Description>
@@ -29,7 +35,12 @@
     <ScryNetFrameworkPayloadDirectory>netfx</ScryNetFrameworkPayloadDirectory>
   </PropertyGroup>
 
-  <Target Name="BuildInjectionPayloads" AfterTargets="Build">
+  <!--
+    Scoped to one TFM: this target is AfterTargets="Build", which runs once per target framework,
+    so without the condition every payload and native helper would be staged twice.
+  -->
+  <Target Name="BuildInjectionPayloads" AfterTargets="Build"
+          Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'">
     <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernTargetFramework)" />

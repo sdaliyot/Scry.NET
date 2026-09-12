@@ -14,11 +14,17 @@ public static class ProcessInspector
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const uint Th32csSnapModule = 0x00000008;
     private const uint Th32csSnapModule32 = 0x00000010;
-    private static readonly nint InvalidHandleValue = new(-1);
+    private static readonly nint InvalidHandleValue = (nint)(-1);
 
     public static ProcessInspectionResult Inspect(int processId)
     {
+#if NETFRAMEWORK
+        // OperatingSystem.IsWindows is .NET 5+. RuntimeInformation is inbox from 4.7.1 and says
+        // the same thing; the modern branch keeps the form the platform analyzer understands.
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+#else
         if (!OperatingSystem.IsWindows())
+#endif
         {
             throw new InjectionException(
                 InjectionErrorCode.UnsupportedClr,

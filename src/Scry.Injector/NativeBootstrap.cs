@@ -29,7 +29,7 @@ internal static class NativeBootstrap
     private const uint BootstrapRuntimeNotLoaded = 0x2101;
     private const uint BootstrapRuntimeNotCompatible = 0x2102;
     private const int ErrorAccessDenied = 5;
-    private static readonly nint InvalidHandleValue = new(-1);
+    private static readonly nint InvalidHandleValue = (nint)(-1);
 
     public static void Inject(
         ProcessInspectionResult target,
@@ -292,11 +292,14 @@ internal static class NativeBootstrap
             destination.Add(0);
         }
 
+        // Non-null past the guard above, but .NET Framework's reference assemblies are not
+        // annotated, so the compiler cannot infer that from string.IsNullOrEmpty.
+        var text = value!;
         var offset = checked((uint)destination.Count);
-        destination.AddRange(Encoding.Unicode.GetBytes(value));
+        destination.AddRange(Encoding.Unicode.GetBytes(text));
         destination.Add(0);
         destination.Add(0);
-        return new(offset, checked((uint)value.Length));
+        return new(offset, checked((uint)text.Length));
     }
 
     private static BufferReference AddBytes(List<byte> destination, byte[] value)
@@ -401,11 +404,11 @@ internal static class NativeBootstrap
                 InjectionErrorCode.UnsupportedClr,
             _ => InjectionErrorCode.BootstrapFailed
         };
-        var message = status?.Message;
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            message = $"The native bootstrap failed with status 0x{result:x8}.";
-        }
+        // Assigned unconditionally rather than patched in place, so it is non-null on every
+        // path without depending on nullable annotations the net472 reference assemblies lack.
+        var message = string.IsNullOrWhiteSpace(status?.Message)
+            ? $"The native bootstrap failed with status 0x{result:x8}."
+            : status!.Message;
 
         throw new InjectionException(
             code,
@@ -583,7 +586,7 @@ internal static class NativeBootstrap
             SetHandle(address);
         }
 
-        public override bool IsInvalid => handle == 0;
+        public override bool IsInvalid => handle == IntPtr.Zero;
 
         protected override bool ReleaseHandle() =>
             VirtualFreeEx(_process, handle, 0, MemRelease);
