@@ -1,7 +1,8 @@
 using System.Collections.Concurrent;
 using Scry.Contracts;
 using Scry.Runtime;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Tests;
 
@@ -15,7 +16,7 @@ public sealed class ExecutionMarshallingTests
     [Fact]
     public async Task Ui_marshalling_is_rejected_and_unadvertised_without_a_marshaller()
     {
-        using var host = AgentHost.Start(builder => builder.RegisterValue("value", 1));
+        using var host = EndpointHost.Start(builder => builder.RegisterValue("value", 1));
         await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
 
         var capabilities = await client.RequestAsync("capabilities");
@@ -37,7 +38,7 @@ public sealed class ExecutionMarshallingTests
     public async Task Unknown_marshal_target_is_rejected()
     {
         using var executor = new SingleThreadExecutor();
-        using var host = AgentHost.Start(builder => builder.UseExecutionMarshaller(executor.Marshal));
+        using var host = EndpointHost.Start(builder => builder.UseExecutionMarshaller(executor.Marshal));
         await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
 
         var rejected = await client.RequestAsync(
@@ -50,7 +51,7 @@ public sealed class ExecutionMarshallingTests
     public async Task Marshalled_submissions_start_and_resume_on_the_nominated_thread()
     {
         using var executor = new SingleThreadExecutor();
-        using var host = AgentHost.Start(builder => builder.UseExecutionMarshaller(executor.Marshal));
+        using var host = EndpointHost.Start(builder => builder.UseExecutionMarshaller(executor.Marshal));
         await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
 
         var capabilities = await client.RequestAsync("capabilities");
@@ -82,7 +83,7 @@ public sealed class ExecutionMarshallingTests
     public async Task Marshalled_submission_failures_surface_as_normal_execution_errors()
     {
         using var executor = new SingleThreadExecutor();
-        using var host = AgentHost.Start(builder => builder.UseExecutionMarshaller(executor.Marshal));
+        using var host = EndpointHost.Start(builder => builder.UseExecutionMarshaller(executor.Marshal));
         await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
 
         // a statement body, so this throws at run time on the marshalled thread rather than

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Scry.Runtime;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Tests;
 
@@ -18,7 +19,7 @@ public sealed class JobDisposalTests
     public async Task Host_dispose_does_not_throw_when_a_job_outlives_the_shutdown_grace_period()
     {
         var signal = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var host = AgentHost.Start(builder => builder.RegisterJobOperation(
+        await using var host = EndpointHost.Start(builder => builder.RegisterJobOperation(
             "outlives-shutdown",
             async (_, context) =>
             {

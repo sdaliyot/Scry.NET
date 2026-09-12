@@ -75,7 +75,7 @@ public delegate Task<object?> ExecutionMarshaller(
     Func<Task<object?>> callback,
     CancellationToken cancellationToken);
 
-public sealed class AgentConfiguration
+public sealed class EndpointConfiguration
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, RegisteredRoot> _roots = new(StringComparer.Ordinal);

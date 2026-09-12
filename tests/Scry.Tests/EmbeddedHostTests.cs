@@ -2,7 +2,8 @@ using System.Text.Json;
 using System.Diagnostics;
 using System.IO.Pipes;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Tests;
 
@@ -22,12 +23,12 @@ public sealed class EmbeddedHostTests
             "dynamic",
             2,
             "Replacement dynamic value.",
-            AgentRegistrationMode.ReplaceExisting);
+            RegistrationMode.ReplaceExisting);
         registry.RegisterOperation(
             "state.update",
             arguments => arguments.GetProperty("value").GetInt32(),
             "Updates sample state after explicit approval.",
-            new AgentOperationPolicy
+            new OperationPolicy
             {
                 RequiresConfirmation = true
             });
@@ -35,9 +36,9 @@ public sealed class EmbeddedHostTests
             "state.read",
             _ => fixture.State.Count,
             "Reads sample state without mutation.",
-            new AgentOperationPolicy
+            new OperationPolicy
             {
-                ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+                ExecutionPolicy = OperationExecutionPolicy.UiOwner,
                 IsReadOnly = true
             });
 
@@ -67,7 +68,7 @@ public sealed class EmbeddedHostTests
             "state.update",
             (arguments, _) => new ValueTask<object?>(arguments.GetProperty("value").GetInt32() * 2),
             "Replacement job-capable updater.",
-            mode: AgentRegistrationMode.ReplaceExisting);
+            mode: RegistrationMode.ReplaceExisting);
         var replaced = await client.RequestAsync("invoke", new
         {
             registeredOperation = "state.update",
@@ -968,13 +969,13 @@ public sealed class EmbeddedHostTests
 
     private sealed class TestHost : IAsyncDisposable
     {
-        private TestHost(AgentHost host, TestState state)
+        private TestHost(EndpointHost host, TestState state)
         {
             Host = host;
             State = state;
         }
 
-        public AgentHost Host { get; }
+        public EndpointHost Host { get; }
 
         public TestState State { get; }
 
@@ -987,7 +988,7 @@ public sealed class EmbeddedHostTests
             int maximumLogEntries = 256)
         {
             var state = new TestState();
-            var host = AgentHost.Start(
+            var host = EndpointHost.Start(
                 builder => builder
                     .RegisterValue("state", state)
                     .RegisterValue("numbers", state.Numbers)
@@ -1002,7 +1003,7 @@ public sealed class EmbeddedHostTests
                             await Task.Delay(500, cancellationToken);
                             return null;
                         }),
-                new AgentHostOptions
+                new EndpointOptions
                 {
                     Alias = $"test-{Guid.NewGuid():N}",
                     HandleLease = handleLease ?? TimeSpan.FromMinutes(1),

@@ -1,5 +1,5 @@
 using System.Reflection;
-using Scry.Sdk;
+using Scry.Endpoint;
 
 namespace Scry.Injector.Payload;
 
@@ -27,7 +27,7 @@ internal static class DesktopAdapterWiring
     public const string Wpf = "wpf";
     public const string WinForms = "winforms";
 
-    public static void Apply(AgentBuilder builder, string? adapters)
+    public static void Apply(EndpointBuilder builder, string? adapters)
     {
         if (string.IsNullOrWhiteSpace(adapters) ||
             adapters!.Equals(None, StringComparison.OrdinalIgnoreCase))
@@ -53,7 +53,7 @@ internal static class DesktopAdapterWiring
             nameof(adapters));
     }
 
-    private static void ApplyWpf(AgentBuilder builder)
+    private static void ApplyWpf(EndpointBuilder builder)
     {
         // Application.Current is the documented root for UseWpf(Application): the adapter
         // enumerates Application.Windows when no explicit roots are registered, so the target
@@ -73,14 +73,14 @@ internal static class DesktopAdapterWiring
 
         InvokeRegistration(
             "Scry.Wpf",
-            "Scry.Wpf.WpfAgentBuilderExtensions",
+            "Scry.Wpf.WpfEndpointBuilderExtensions",
             "UseWpf",
             applicationType,
             builder,
             current);
     }
 
-    private static void ApplyWinForms(AgentBuilder builder)
+    private static void ApplyWinForms(EndpointBuilder builder)
     {
         // UseWinForms needs a Control to marshal through. The first open form is the closest
         // equivalent to WPF's Application.Current and likewise needs no cooperation.
@@ -100,7 +100,7 @@ internal static class DesktopAdapterWiring
         var controlType = RequireLoadedType("System.Windows.Forms", "System.Windows.Forms.Control");
         InvokeRegistration(
             "Scry.WinForms",
-            "Scry.WinForms.WinFormsAgentBuilderExtensions",
+            "Scry.WinForms.WinFormsEndpointBuilderExtensions",
             "UseWinForms",
             controlType,
             builder,
@@ -134,7 +134,7 @@ internal static class DesktopAdapterWiring
         string extensionsTypeName,
         string methodName,
         Type ownerParameterType,
-        AgentBuilder builder,
+        EndpointBuilder builder,
         object owner)
     {
         var adapter = LoadAdapterAssembly(adapterAssemblyName);
@@ -150,16 +150,16 @@ internal static class DesktopAdapterWiring
                 parameters[1].ParameterType == ownerParameterType)
             ?? throw new InvalidOperationException(
                 extensionsTypeName + "." + methodName + " does not have the expected " +
-                "(AgentBuilder, " + ownerParameterType.Name + ", configure, options) overload.");
+                "(EndpointBuilder, " + ownerParameterType.Name + ", configure, options) overload.");
 
         method.Invoke(null, new object?[] { builder, owner, null, null });
     }
 
     /// <summary>
     /// Loads a staged adapter from this payload's own directory into this payload's own load
-    /// context, so the AgentBuilder type it binds against is the one this assembly is using. On
+    /// context, so the EndpointBuilder type it binds against is the one this assembly is using. On
     /// .NET a plain Assembly.LoadFrom would land in the default context and produce two distinct
-    /// AgentBuilder types.
+    /// EndpointBuilder types.
     /// </summary>
     private static Assembly LoadAdapterAssembly(string assemblyName)
     {

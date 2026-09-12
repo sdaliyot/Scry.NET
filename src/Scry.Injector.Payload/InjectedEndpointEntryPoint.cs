@@ -1,13 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Reflection;
-using Scry.Sdk;
+using Scry.Endpoint;
 
 namespace Scry.Injector.Payload;
 
-public static class InjectedAgentEntryPoint
+public static class InjectedEndpointEntryPoint
 {
-    private static AgentHost? _host;
+    private static EndpointHost? _host;
     private static int _started;
 
     public static int StartForNetFramework(string argument)
@@ -39,11 +39,11 @@ public static class InjectedAgentEntryPoint
         try
         {
             var configuration = ParseConfiguration(argument);
-            _host = AgentHost.Start(
+            _host = EndpointHost.Start(
                 configure: builder => DesktopAdapterWiring.Apply(builder, configuration.Adapters),
                 options: configuration.Alias is null
                     ? null
-                    : new AgentHostOptions { Alias = configuration.Alias });
+                    : new EndpointOptions { Alias = configuration.Alias });
             return 0;
         }
         catch (Exception exception)
@@ -124,7 +124,7 @@ public static class InjectedAgentEntryPoint
             return null;
         }
 
-        var directory = Path.GetDirectoryName(typeof(InjectedAgentEntryPoint).Assembly.Location);
+        var directory = Path.GetDirectoryName(typeof(InjectedEndpointEntryPoint).Assembly.Location);
         var path = Path.Combine(directory!, name + ".dll");
         return File.Exists(path) ? Assembly.LoadFrom(path) : null;
     }

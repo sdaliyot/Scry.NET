@@ -1,5 +1,5 @@
 using System.Windows.Forms;
-using Scry.Sdk;
+using Scry.Endpoint;
 using Scry.WinForms;
 
 namespace Scry.SampleWinForms;
@@ -29,7 +29,7 @@ internal static class Program
         _ = form.Handle;
         var dispatcher = new WinFormsDispatcher(form);
 
-        using var host = AgentHost.Start(
+        using var host = EndpointHost.Start(
             builder => builder
                 .RegisterRoot("orders", () => state, "Live order processing state.")
                 .RegisterValue("sample.kind", "winforms", "Identifies this embedded sample process.")
@@ -50,9 +50,9 @@ internal static class Program
                         return state.Status;
                     },
                     "Updates order status on the Windows Forms owner thread.",
-                    new AgentOperationPolicy
+                    new OperationPolicy
                     {
-                        ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+                        ExecutionPolicy = OperationExecutionPolicy.UiOwner,
                         RequiresConfirmation = true
                     })
                 .RegisterJobOperation(
@@ -71,13 +71,13 @@ internal static class Program
                         return state.ImportedOrders;
                     },
                     "Imports orders asynchronously and publishes the result on the owner thread.",
-                    new AgentOperationPolicy
+                    new OperationPolicy
                     {
-                        ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+                        ExecutionPolicy = OperationExecutionPolicy.UiOwner,
                         RequiresConfirmation = true
                     })
                 .UseWinForms(form, winForms => winForms.RegisterRoot("main", form)),
-            new AgentHostOptions { Alias = alias, Aliases = ["scry-winforms-sample"] });
+            new EndpointOptions { Alias = alias, Aliases = ["scry-winforms-sample"] });
 
         Console.WriteLine($"Target: {host.TargetId}");
         Console.WriteLine($"Descriptor: {host.DescriptorPath}");

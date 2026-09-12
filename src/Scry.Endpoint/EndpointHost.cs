@@ -2,9 +2,9 @@ using System.Text.Json;
 using Scry.Contracts;
 using Scry.Runtime;
 
-namespace Scry.Sdk;
+namespace Scry.Endpoint;
 
-public sealed class AgentHostOptions
+public sealed class EndpointOptions
 {
     public string Alias { get; init; } = DefaultAlias();
 
@@ -65,66 +65,66 @@ public sealed class AgentHostOptions
     }
 }
 
-public enum AgentRegistrationMode
+public enum RegistrationMode
 {
     RejectDuplicate,
     ReplaceExisting
 }
 
-public enum AgentOperationExecutionPolicy
+public enum OperationExecutionPolicy
 {
     WorkerThread,
     UiOwner
 }
 
-public sealed record AgentOperationPolicy
+public sealed record OperationPolicy
 {
-    public AgentOperationExecutionPolicy ExecutionPolicy { get; init; } =
-        AgentOperationExecutionPolicy.WorkerThread;
+    public OperationExecutionPolicy ExecutionPolicy { get; init; } =
+        OperationExecutionPolicy.WorkerThread;
 
     public bool IsReadOnly { get; init; }
 
     public bool RequiresConfirmation { get; init; }
 }
 
-public sealed class AgentRegistrationRegistry
+public sealed class RegistrationRegistry
 {
-    internal AgentRegistrationRegistry(AgentConfiguration configuration)
+    internal RegistrationRegistry(EndpointConfiguration configuration)
     {
         Configuration = configuration;
     }
 
-    internal AgentConfiguration Configuration { get; }
+    internal EndpointConfiguration Configuration { get; }
 
-    public AgentRegistrationRegistry RegisterRoot(
+    public RegistrationRegistry RegisterRoot(
         string name,
         Func<object?> valueFactory,
         string? description = null,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
         Configuration.AddRoot(
             name,
             valueFactory,
             description,
-            mode == AgentRegistrationMode.ReplaceExisting);
+            mode == RegistrationMode.ReplaceExisting);
         return this;
     }
 
-    public AgentRegistrationRegistry RegisterValue(
+    public RegistrationRegistry RegisterValue(
         string name,
         object? value,
         string? description = null,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate) =>
+        RegistrationMode mode = RegistrationMode.RejectDuplicate) =>
         RegisterRoot(name, () => value, description, mode);
 
-    public AgentRegistrationRegistry RegisterOperation(
+    public RegistrationRegistry RegisterOperation(
         string name,
         Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
         string? description = null,
-        AgentOperationPolicy? policy = null,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        OperationPolicy? policy = null,
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
-        var selectedPolicy = policy ?? new AgentOperationPolicy();
+        var selectedPolicy = policy ?? new OperationPolicy();
         Configuration.AddOperation(
             name,
             handler,
@@ -132,16 +132,16 @@ public sealed class AgentRegistrationRegistry
             ToWireName(selectedPolicy.ExecutionPolicy),
             selectedPolicy.IsReadOnly,
             selectedPolicy.RequiresConfirmation,
-            mode == AgentRegistrationMode.ReplaceExisting);
+            mode == RegistrationMode.ReplaceExisting);
         return this;
     }
 
-    public AgentRegistrationRegistry RegisterOperation(
+    public RegistrationRegistry RegisterOperation(
         string name,
         Func<JsonElement, object?> handler,
         string? description = null,
-        AgentOperationPolicy? policy = null,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        OperationPolicy? policy = null,
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
         if (handler is null)
         {
@@ -156,14 +156,14 @@ public sealed class AgentRegistrationRegistry
             mode);
     }
 
-    public AgentRegistrationRegistry RegisterJobOperation(
+    public RegistrationRegistry RegisterJobOperation(
         string name,
         Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
         string? description = null,
-        AgentOperationPolicy? policy = null,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        OperationPolicy? policy = null,
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
-        var selectedPolicy = policy ?? new AgentOperationPolicy();
+        var selectedPolicy = policy ?? new OperationPolicy();
         Configuration.AddContextualOperation(
             name,
             handler,
@@ -171,7 +171,7 @@ public sealed class AgentRegistrationRegistry
             ToWireName(selectedPolicy.ExecutionPolicy),
             selectedPolicy.IsReadOnly,
             selectedPolicy.RequiresConfirmation,
-            mode == AgentRegistrationMode.ReplaceExisting);
+            mode == RegistrationMode.ReplaceExisting);
         return this;
     }
 
@@ -179,59 +179,59 @@ public sealed class AgentRegistrationRegistry
 
     public bool UnregisterOperation(string name) => Configuration.RemoveOperation(name);
 
-    private static string ToWireName(AgentOperationExecutionPolicy policy) =>
+    private static string ToWireName(OperationExecutionPolicy policy) =>
         policy switch
         {
-            AgentOperationExecutionPolicy.WorkerThread => "worker-thread",
-            AgentOperationExecutionPolicy.UiOwner => "ui-owner",
+            OperationExecutionPolicy.WorkerThread => "worker-thread",
+            OperationExecutionPolicy.UiOwner => "ui-owner",
             _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, null)
         };
 }
 
-public sealed class AgentBuilder
+public sealed class EndpointBuilder
 {
-    public AgentBuilder()
+    public EndpointBuilder()
     {
-        Registrations = new(new AgentConfiguration());
+        Registrations = new(new EndpointConfiguration());
     }
 
-    internal AgentConfiguration Configuration => Registrations.Configuration;
+    internal EndpointConfiguration Configuration => Registrations.Configuration;
 
-    internal AgentRegistrationRegistry Registrations { get; }
+    internal RegistrationRegistry Registrations { get; }
 
-    public AgentBuilder RegisterRoot(
+    public EndpointBuilder RegisterRoot(
         string name,
         Func<object?> valueFactory,
         string? description = null) =>
-        RegisterRoot(name, valueFactory, description, AgentRegistrationMode.RejectDuplicate);
+        RegisterRoot(name, valueFactory, description, RegistrationMode.RejectDuplicate);
 
-    public AgentBuilder RegisterRoot(
+    public EndpointBuilder RegisterRoot(
         string name,
         Func<object?> valueFactory,
         string? description,
-        AgentRegistrationMode mode)
+        RegistrationMode mode)
     {
         Registrations.RegisterRoot(name, valueFactory, description, mode);
         return this;
     }
 
-    public AgentBuilder RegisterValue(
+    public EndpointBuilder RegisterValue(
         string name,
         object? value,
         string? description = null) =>
-        RegisterValue(name, value, description, AgentRegistrationMode.RejectDuplicate);
+        RegisterValue(name, value, description, RegistrationMode.RejectDuplicate);
 
-    public AgentBuilder RegisterValue(
+    public EndpointBuilder RegisterValue(
         string name,
         object? value,
         string? description,
-        AgentRegistrationMode mode)
+        RegistrationMode mode)
     {
         Registrations.RegisterValue(name, value, description, mode);
         return this;
     }
 
-    public AgentBuilder RegisterOperation(
+    public EndpointBuilder RegisterOperation(
         string name,
         Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
         string? description = null) =>
@@ -240,20 +240,20 @@ public sealed class AgentBuilder
             handler,
             description,
             policy: null,
-            AgentRegistrationMode.RejectDuplicate);
+            RegistrationMode.RejectDuplicate);
 
-    public AgentBuilder RegisterOperation(
+    public EndpointBuilder RegisterOperation(
         string name,
         Func<JsonElement, CancellationToken, ValueTask<object?>> handler,
         string? description,
-        AgentOperationPolicy? policy,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        OperationPolicy? policy,
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
         Registrations.RegisterOperation(name, handler, description, policy, mode);
         return this;
     }
 
-    public AgentBuilder RegisterOperation(
+    public EndpointBuilder RegisterOperation(
         string name,
         Func<JsonElement, object?> handler,
         string? description = null) =>
@@ -262,20 +262,20 @@ public sealed class AgentBuilder
             handler,
             description,
             policy: null,
-            AgentRegistrationMode.RejectDuplicate);
+            RegistrationMode.RejectDuplicate);
 
-    public AgentBuilder RegisterOperation(
+    public EndpointBuilder RegisterOperation(
         string name,
         Func<JsonElement, object?> handler,
         string? description,
-        AgentOperationPolicy? policy,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        OperationPolicy? policy,
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
         Registrations.RegisterOperation(name, handler, description, policy, mode);
         return this;
     }
 
-    public AgentBuilder RegisterJobOperation(
+    public EndpointBuilder RegisterJobOperation(
         string name,
         Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
         string? description = null) =>
@@ -284,14 +284,14 @@ public sealed class AgentBuilder
             handler,
             description,
             policy: null,
-            AgentRegistrationMode.RejectDuplicate);
+            RegistrationMode.RejectDuplicate);
 
-    public AgentBuilder RegisterJobOperation(
+    public EndpointBuilder RegisterJobOperation(
         string name,
         Func<JsonElement, OperationExecutionContext, ValueTask<object?>> handler,
         string? description,
-        AgentOperationPolicy? policy,
-        AgentRegistrationMode mode = AgentRegistrationMode.RejectDuplicate)
+        OperationPolicy? policy,
+        RegistrationMode mode = RegistrationMode.RejectDuplicate)
     {
         Registrations.RegisterJobOperation(name, handler, description, policy, mode);
         return this;
@@ -302,18 +302,18 @@ public sealed class AgentBuilder
     /// WPF and Windows Forms adapters call this for you; register it directly only for a host with
     /// its own single-threaded context.
     /// </summary>
-    public AgentBuilder UseExecutionMarshaller(ExecutionMarshaller marshaller)
+    public EndpointBuilder UseExecutionMarshaller(ExecutionMarshaller marshaller)
     {
         Configuration.SetExecutionMarshaller(marshaller);
         return this;
     }
 }
 
-public sealed class AgentHost : IAsyncDisposable, IDisposable
+public sealed class EndpointHost : IAsyncDisposable, IDisposable
 {
     private readonly RuntimeHost _runtime;
 
-    private AgentHost(RuntimeHost runtime, AgentRegistrationRegistry registrations)
+    private EndpointHost(RuntimeHost runtime, RegistrationRegistry registrations)
     {
         _runtime = runtime;
         Registrations = registrations;
@@ -325,15 +325,15 @@ public sealed class AgentHost : IAsyncDisposable, IDisposable
 
     public string DescriptorPath => _runtime.DescriptorPath;
 
-    public AgentRegistrationRegistry Registrations { get; }
+    public RegistrationRegistry Registrations { get; }
 
-    public static AgentHost Start(
-        Action<AgentBuilder>? configure = null,
-        AgentHostOptions? options = null)
+    public static EndpointHost Start(
+        Action<EndpointBuilder>? configure = null,
+        EndpointOptions? options = null)
     {
-        var builder = new AgentBuilder();
+        var builder = new EndpointBuilder();
         configure?.Invoke(builder);
-        var selected = options ?? new AgentHostOptions();
+        var selected = options ?? new EndpointOptions();
         var runtime = RuntimeHost.Start(
             builder.Configuration,
             new RuntimeHostOptions

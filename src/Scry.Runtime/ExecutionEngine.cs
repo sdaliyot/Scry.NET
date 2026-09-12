@@ -75,13 +75,13 @@ internal sealed class ExecutionEngine
         "Scry.Runtime"
     };
 
-    private readonly AgentConfiguration _configuration;
+    private readonly EndpointConfiguration _configuration;
     private readonly RuntimeHostOptions _options;
     private readonly AssemblyCatalog _assemblies;
     private readonly ScriptCache _scripts;
 
     public ExecutionEngine(
-        AgentConfiguration configuration,
+        EndpointConfiguration configuration,
         RuntimeHostOptions options,
         AssemblyCatalog assemblies)
     {

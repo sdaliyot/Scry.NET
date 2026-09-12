@@ -233,8 +233,8 @@ internal static class NativeBootstrap
         references[2] = AddWideString(
             bytes,
             target.RuntimeFamily == TargetRuntimeFamily.ModernDotNet
-                ? "Scry.Injector.Payload.InjectedAgentEntryPoint, Scry.Injector.Payload"
-                : "Scry.Injector.Payload.InjectedAgentEntryPoint");
+                ? "Scry.Injector.Payload.InjectedEndpointEntryPoint, Scry.Injector.Payload"
+                : "Scry.Injector.Payload.InjectedEndpointEntryPoint");
         references[3] = AddWideString(
             bytes,
             target.RuntimeFamily == TargetRuntimeFamily.ModernDotNet

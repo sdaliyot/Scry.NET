@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using Scry.Sdk;
+using Scry.Endpoint;
 
 var alias = args
     .Select((value, index) => (value, index))
@@ -8,7 +8,7 @@ var alias = args
     .FirstOrDefault() ?? "scry-sample";
 var waitForStdin = args.Contains("--wait-for-stdin", StringComparer.Ordinal);
 var state = new SampleState();
-await using var host = AgentHost.Start(
+await using var host = EndpointHost.Start(
     builder => builder
         .RegisterRoot("app", () => state, "Current mutable console application state.")
         .RegisterValue("numbers", state.Numbers, "A pageable collection.")
@@ -21,7 +21,7 @@ await using var host = AgentHost.Start(
                 return state.Count;
             },
             "Sets the console counter to an explicit value.",
-            new AgentOperationPolicy { RequiresConfirmation = true })
+            new OperationPolicy { RequiresConfirmation = true })
         .RegisterOperation(
             "echo",
             arguments => new
@@ -31,7 +31,7 @@ await using var host = AgentHost.Start(
                     : null
             },
             "Returns the supplied message.",
-            new AgentOperationPolicy { IsReadOnly = true })
+            new OperationPolicy { IsReadOnly = true })
         .RegisterJobOperation(
             "delay",
             async (arguments, context) =>
@@ -43,7 +43,7 @@ await using var host = AgentHost.Start(
                 return $"{startedAt}:{DateTimeOffset.UtcNow.UtcTicks}:{Process.GetCurrentProcess().Id}";
             },
             "Waits cooperatively and returns the process identity.",
-            new AgentOperationPolicy { IsReadOnly = true })
+            new OperationPolicy { IsReadOnly = true })
         .RegisterJobOperation(
             "counter.recalculate",
             async (arguments, context) =>
@@ -57,8 +57,8 @@ await using var host = AgentHost.Start(
                 return state.Count;
             },
             "Recalculates the counter as a cancellable background job.",
-            new AgentOperationPolicy { RequiresConfirmation = true }),
-    new AgentHostOptions { Alias = alias, Aliases = ["scry-sample"] });
+            new OperationPolicy { RequiresConfirmation = true }),
+    new EndpointOptions { Alias = alias, Aliases = ["scry-sample"] });
 
 Console.WriteLine($"Target: {host.TargetId}");
 Console.WriteLine($"Descriptor: {host.DescriptorPath}");

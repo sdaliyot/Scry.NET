@@ -9,7 +9,7 @@ namespace Scry.Runtime;
 
 internal sealed class OperationDispatcher(
     TargetMetadata target,
-    AgentConfiguration configuration,
+    EndpointConfiguration configuration,
     AssemblyCatalog assemblies,
     ExecutionEngine execution)
 {

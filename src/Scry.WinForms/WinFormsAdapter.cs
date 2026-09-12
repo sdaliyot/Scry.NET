@@ -4,14 +4,14 @@ using System.Drawing.Imaging;
 using System.Text.Json;
 using System.Windows.Forms;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
 
 namespace Scry.WinForms;
 
-public static class WinFormsAgentBuilderExtensions
+public static class WinFormsEndpointBuilderExtensions
 {
-    public static AgentBuilder UseWinForms(
-        this AgentBuilder builder,
+    public static EndpointBuilder UseWinForms(
+        this EndpointBuilder builder,
         Control dispatcherOwner,
         Action<WinFormsAdapterBuilder>? configure = null,
         WinFormsAdapterOptions? options = null)
@@ -23,9 +23,9 @@ public static class WinFormsAgentBuilderExtensions
         var adapterBuilder = new WinFormsAdapterBuilder(dispatcherOwner, options);
         configure?.Invoke(adapterBuilder);
         var adapter = adapterBuilder.Build();
-        var readOnlyUiPolicy = new AgentOperationPolicy
+        var readOnlyUiPolicy = new OperationPolicy
         {
-            ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+            ExecutionPolicy = OperationExecutionPolicy.UiOwner,
             IsReadOnly = true
         };
 

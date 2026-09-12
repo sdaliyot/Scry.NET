@@ -25,7 +25,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
     private int _connectionId;
     private int _disposed;
 
-    private RuntimeHost(AgentConfiguration configuration, RuntimeHostOptions options)
+    private RuntimeHost(EndpointConfiguration configuration, RuntimeHostOptions options)
     {
         if (configuration is null)
         {
@@ -125,7 +125,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
     public string DescriptorPath { get; }
 
-    public static RuntimeHost Start(AgentConfiguration configuration, RuntimeHostOptions? options = null) =>
+    public static RuntimeHost Start(EndpointConfiguration configuration, RuntimeHostOptions? options = null) =>
         new(configuration, options ?? new RuntimeHostOptions());
 
     public void Dispose()

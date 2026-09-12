@@ -1,14 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    The client deliberately references only Scry.Contracts. It talks to an endpoint over a
+    named pipe and needs framing and DTOs, nothing else - in particular not Scry.Runtime,
+    which would drag the Roslyn scripting stack into every consumer that merely wants to
+    connect to a target.
+  -->
   <ItemGroup>
     <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
-    <ProjectReference Include="..\Scry.Runtime\Scry.Runtime.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
-    <PackageId>Scry.Sdk</PackageId>
-    <Description>Embedded hosting and client SDK for Scry.NET.</Description>
+    <PackageId>Scry.Client</PackageId>
+    <Description>Client for connecting to a Scry.NET endpoint.</Description>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">

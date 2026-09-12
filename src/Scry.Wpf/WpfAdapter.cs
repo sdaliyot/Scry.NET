@@ -13,14 +13,14 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
 
 namespace Scry.Wpf;
 
-public static class WpfAgentBuilderExtensions
+public static class WpfEndpointBuilderExtensions
 {
-    public static AgentBuilder UseWpf(
-        this AgentBuilder builder,
+    public static EndpointBuilder UseWpf(
+        this EndpointBuilder builder,
         Dispatcher dispatcher,
         Action<WpfAdapterBuilder>? configure = null,
         WpfAdapterOptions? options = null)
@@ -35,8 +35,8 @@ public static class WpfAgentBuilderExtensions
         return builder;
     }
 
-    public static AgentBuilder UseWpf(
-        this AgentBuilder builder,
+    public static EndpointBuilder UseWpf(
+        this EndpointBuilder builder,
         Application application,
         Action<WpfAdapterBuilder>? configure = null,
         WpfAdapterOptions? options = null)
@@ -51,11 +51,11 @@ public static class WpfAgentBuilderExtensions
         return builder;
     }
 
-    private static void Register(AgentBuilder builder, WpfAdapter adapter)
+    private static void Register(EndpointBuilder builder, WpfAdapter adapter)
     {
-        var readOnlyUiPolicy = new AgentOperationPolicy
+        var readOnlyUiPolicy = new OperationPolicy
         {
-            ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+            ExecutionPolicy = OperationExecutionPolicy.UiOwner,
             IsReadOnly = true
         };
         builder.RegisterValue("wpf", adapter, "Dispatcher-marshalled WPF inspection service.");

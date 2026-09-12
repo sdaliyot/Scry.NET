@@ -2,7 +2,7 @@ using System.IO.Pipes;
 using System.Text.Json;
 using Scry.Contracts;
 
-namespace Scry.Sdk;
+namespace Scry.Client;
 
 public sealed class ScryClient : IAsyncDisposable
 {

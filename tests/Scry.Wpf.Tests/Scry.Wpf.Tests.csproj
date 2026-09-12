@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scry.Wpf\Scry.Wpf.csproj" />
+    <!-- ScryClient moved out of the host assembly, so it is no longer transitive via Scry.Wpf. -->
+    <ProjectReference Include="..\..\src\Scry.Client\Scry.Client.csproj" />
   </ItemGroup>
 
 </Project>

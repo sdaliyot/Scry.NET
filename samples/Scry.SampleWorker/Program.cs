@@ -1,10 +1,10 @@
-using Scry.Sdk;
+using Scry.Endpoint;
 
 var alias = SampleArguments.Alias(args, "scry-worker-sample");
 var state = new WorkerState();
 using var stopping = new CancellationTokenSource();
 var worker = RunWorkerAsync(state, stopping.Token);
-await using var host = AgentHost.Start(
+await using var host = EndpointHost.Start(
     builder => builder
         .RegisterRoot("worker", () => state, "Live queue worker state.")
         .RegisterValue("service.name", "invoice-processor", "Stable worker service identity.")
@@ -17,7 +17,7 @@ await using var host = AgentHost.Start(
                 return state.Mode;
             },
             "Changes how the worker consumes queued invoices.",
-            new AgentOperationPolicy { RequiresConfirmation = true })
+            new OperationPolicy { RequiresConfirmation = true })
         .RegisterJobOperation(
             "queue.drain",
             async (arguments, context) =>
@@ -31,8 +31,8 @@ await using var host = AgentHost.Start(
                 return state.Processed;
             },
             "Simulates a cancellable, long-running queue drain.",
-            new AgentOperationPolicy { RequiresConfirmation = true }),
-    new AgentHostOptions { Alias = alias, Aliases = ["scry-worker-sample"] });
+            new OperationPolicy { RequiresConfirmation = true }),
+    new EndpointOptions { Alias = alias, Aliases = ["scry-worker-sample"] });
 
 Console.WriteLine($"Target: {host.TargetId}");
 Console.WriteLine($"Descriptor: {host.DescriptorPath}");

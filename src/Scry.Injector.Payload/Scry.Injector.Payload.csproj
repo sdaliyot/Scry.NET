@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Scry.Sdk\Scry.Sdk.csproj" />
+    <ProjectReference Include="..\Scry.Endpoint\Scry.Endpoint.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

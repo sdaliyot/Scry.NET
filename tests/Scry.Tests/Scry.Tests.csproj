@@ -30,7 +30,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scry.Contracts\Scry.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Scry.Runtime\Scry.Runtime.csproj" />
-    <ProjectReference Include="..\..\src\Scry.Sdk\Scry.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\Scry.Endpoint\Scry.Endpoint.csproj" />
+    <ProjectReference Include="..\..\src\Scry.Client\Scry.Client.csproj" />
     <ProjectReference Include="..\..\src\Scry.Injector\Scry.Injector.csproj"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
     <ProjectReference Include="..\..\src\Scry.Cli\Scry.Cli.csproj"

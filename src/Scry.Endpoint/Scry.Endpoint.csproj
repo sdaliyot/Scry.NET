@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
+    <ProjectReference Include="..\Scry.Runtime\Scry.Runtime.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
+    <PackageId>Scry.Endpoint</PackageId>
+    <Description>In-process endpoint hosting for Scry.NET, started by the target application in embedded mode or by an injected payload in attach mode.</Description>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="$(BclAsyncInterfacesVersion)" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="$(TasksExtensionsVersion)" />
+  </ItemGroup>
+
+</Project>

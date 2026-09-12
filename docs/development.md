@@ -6,10 +6,11 @@
 |---|---|
 | `Scry.Contracts` | Wire contracts, framing, target descriptors, discovery |
 | `Scry.Runtime` | Named-pipe server, sessions, handles, reflection, Roslyn execution, assembly catalog, process-scoped jobs |
-| `Scry.Sdk` | Embedded `AgentHost`, registration builder, protocol client |
+| `Scry.Endpoint` | In-process `EndpointHost` and registration builder, started by the target or by an injected payload |
+| `Scry.Client` | `ScryClient` - connects to an endpoint over the named pipe. References only `Scry.Contracts`, so a client never carries the engine |
 | `Scry.Wpf` | Optional dispatcher-safe WPF projections, waits/assertions, screenshots |
 | `Scry.WinForms` | Optional control-owner-marshalled WinForms projections, waits/assertions, screenshots |
-| `Scry.Injector.Payload` | Minimal managed entry point that retains the shared `AgentHost` |
+| `Scry.Injector.Payload` | Minimal managed entry point that retains the shared `EndpointHost` |
 | `Scry.Injector` | Process detection, refusal policy, native loading, and attach orchestration |
 | `Scry.Injector.Native` | Architecture-specific Win32/CLR bootstrap DLL |
 | `Scry.Cli` | Stateless `scry` JSON command line |
@@ -28,7 +29,8 @@ Target names and compatibility package versions are centralized in `Directory.Bu
 |---|---|---|
 | `Scry.Contracts` | `net9.0`, `net472` | Identical protocol and descriptor shape |
 | `Scry.Runtime` | `net9.0`, `net472` | CoreCLR load contexts or desktop CLR default-AppDomain behavior |
-| `Scry.Sdk` | `net9.0`, `net472` | Embedded host and client |
+| `Scry.Endpoint` | `net9.0`, `net472` | In-process endpoint host |
+| `Scry.Client` | `net9.0`, `net472` | Client; no Roslyn, no runtime |
 | `Scry.SampleHost` | `net9.0`, `net472` | Non-UI embedded sample |
 | `Scry.Tests` | `net9.0`, `net472` | Runtime integration suite; CLI tests run on `net9.0` |
 | `Scry.Wpf` | `net9.0-windows`, `net472` | Optional WPF adapter; desktop CLR uses direct assembly references |
@@ -36,7 +38,7 @@ Target names and compatibility package versions are centralized in `Directory.Bu
 | `Scry.Wpf.Tests` | `net9.0-windows`, `net472` | STA dispatcher tests, both runtimes |
 | `Scry.WinForms.Tests` | `net9.0-windows`, `net472` | STA message-loop tests, both runtimes |
 | `Scry.Cli` | `net9.0` | Modern-only executable that interoperates with both host targets |
-| `Scry.Injector.Payload` | `net9.0`, `net472` | Calls the same `AgentHost.Start` used by embedded mode |
+| `Scry.Injector.Payload` | `net9.0`, `net472` | Calls the same `EndpointHost.Start` used by embedded mode |
 | `Scry.Injector` | `net9.0` | Must run with the same x86/x64 architecture as the target |
 | `Scry.Injector.Native` | Win32 x86, x64 | Native DLL loaded into the target |
 
@@ -55,7 +57,7 @@ Sessions belong to one target. Object references contain target, session, and ha
 Start the endpoint once and keep the returned host alive:
 
 ```csharp
-using var host = AgentHost.Start(
+using var host = EndpointHost.Start(
     builder => builder
         .RegisterValue("services", serviceProvider, "Application service provider.")
         .RegisterRoot("current", () => currentState, "Current test state.")
@@ -67,8 +69,8 @@ using var host = AgentHost.Start(
                 return ValueTask.FromResult<object?>(null);
             },
             "Resets current state to its test baseline.",
-            new AgentOperationPolicy { RequiresConfirmation = true }),
-    new AgentHostOptions
+            new OperationPolicy { RequiresConfirmation = true }),
+    new EndpointOptions
     {
         Alias = "my-test-target",
         Aliases = ["checkout-a", "worker"]
@@ -77,7 +79,7 @@ using var host = AgentHost.Start(
 
 `RegisterValue` retains a specific object, while `RegisterRoot` evaluates its factory for each request. Registered operations receive structured JSON rather than source text. `RegisterJobOperation` additionally receives an `OperationExecutionContext` with the operation ID, correlation ID, cooperative `CancellationToken`, and bounded job logger. Session, handle, and job limits; lease and retention durations; aliases; preview length; and log bounds are configurable. A retained job keeps its qualified session addressable until the job is removed.
 
-Operation registrations accept an optional `AgentOperationPolicy`:
+Operation registrations accept an optional `OperationPolicy`:
 
 - `ExecutionPolicy` defaults to `WorkerThread`. Set it to `UiOwner` only when the handler or an adapter marshals all UI-owned access itself.
 - `IsReadOnly` tells an agent that the helper is intended only to observe state. It is guidance, not a process security boundary.
@@ -94,7 +96,7 @@ host.Registrations.RegisterRoot(
     "current",
     () => replacementState,
     "Current replacement state.",
-    AgentRegistrationMode.ReplaceExisting);
+    RegistrationMode.ReplaceExisting);
 
 var removed = host.Registrations.UnregisterOperation("reset");
 ```
@@ -120,7 +122,7 @@ All four samples register a root factory, a retained value, a domain operation, 
 
 ### Desktop adapter integration
 
-The desktop packages depend on `Scry.Sdk`, but the dependency never points in the opposite direction. A non-UI target can use the core endpoint without loading PresentationFramework, WindowsBase, or System.Windows.Forms. UI targets opt in during host construction:
+The desktop packages depend on `Scry.Endpoint`, but the dependency never points in the opposite direction. A non-UI target can use the core endpoint without loading PresentationFramework, WindowsBase, or System.Windows.Forms. UI targets opt in during host construction:
 
 ```csharp
 builder.UseWpf(
@@ -192,7 +194,7 @@ Attach uses a strict inspect-before-write sequence:
 4. Allocate a DLL path in the target, start `LoadLibraryW`, locate the injected module, and call its exported bootstrap on a second remote thread.
 5. For .NET Framework, the shim obtains the already-loaded CLR v4 through `ICLRMetaHost`/`ICLRRuntimeInfo`, verifies it is loaded, and calls `ICLRRuntimeHost::ExecuteInDefaultAppDomain`.
 6. For .NET 9, the shim obtains a hostfxr runtime delegate compatible with the already-running CoreCLR and calls the payload's `UnmanagedCallersOnly` entry point. It does not call `coreclr_initialize` and does not create a second runtime.
-7. `Scry.Injector.Payload` calls and retains `AgentHost.Start`; runtime, discovery, transport, authentication, capabilities, and behavior therefore remain identical to embedded mode.
+7. `Scry.Injector.Payload` calls and retains `EndpointHost.Start`; runtime, discovery, transport, authentication, capabilities, and behavior therefore remain identical to embedded mode.
 
 Native work is deliberately kept out of `DllMain`; `DllMain` only records the module handle and exported bootstrap work runs on the injector-created thread. The injector bounds all copied strings, waits with finite timeouts, releases remote allocations and handles, and maps Win32/bootstrap failures to stable codes including `permission_denied`, `loader_failed`, `security_software_interference`, and `bootstrap_failed`.
 
@@ -376,7 +378,7 @@ Roslyn metadata references come only from compatible, file-backed managed assemb
 
 Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code that never observes server cancellation cannot be forcibly stopped safely inside the target process and can continue blocking that connection. Scry does not claim process isolation or hard timeouts.
 
-Host defaults are configurable through `AgentHostOptions`: source length, default/maximum execution milliseconds, imports/references, bounded logs, type result/member limits, and assembly file size. The protocol frame limit remains an independent upper bound.
+Host defaults are configurable through `EndpointOptions`: source length, default/maximum execution milliseconds, imports/references, bounded logs, type result/member limits, and assembly file size. The protocol frame limit remains an independent upper bound.
 
 
 ### Compilation reuse

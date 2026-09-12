@@ -6,7 +6,8 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using System.Text.Json;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Wpf.Tests;
 
@@ -128,7 +129,7 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
     [Fact]
     public async Task Registered_snapshot_returns_inline_structured_json()
     {
-        await using var host = AgentHost.Start(
+        await using var host = EndpointHost.Start(
             builder => builder.UseWpf(
                 fixture.Application,
                 adapter => adapter.RegisterWindow("main", fixture.MainWindow)));
@@ -161,7 +162,7 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
     [Fact]
     public async Task Structured_get_reaches_ui_owned_state_only_when_marshalled()
     {
-        await using var host = AgentHost.Start(
+        await using var host = EndpointHost.Start(
             builder => builder.UseWpf(
                 fixture.Application,
                 adapter => adapter.RegisterWindow("main", fixture.MainWindow)));
@@ -205,7 +206,7 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
     [Fact]
     public async Task Wait_can_observe_ui_owned_state_through_marshalled_evaluations()
     {
-        await using var host = AgentHost.Start(
+        await using var host = EndpointHost.Start(
             builder => builder.UseWpf(
                 fixture.Application,
                 adapter => adapter.RegisterWindow("main", fixture.MainWindow)));
@@ -253,7 +254,7 @@ public sealed class WpfAdapterTests(WpfFixture fixture) : IClassFixture<WpfFixtu
             return root;
         });
 
-        await using var host = AgentHost.Start(
+        await using var host = EndpointHost.Start(
             builder => builder.UseWpf(
                 fixture.Application,
                 adapter => adapter.RegisterRoot("deep", deepRoot)));

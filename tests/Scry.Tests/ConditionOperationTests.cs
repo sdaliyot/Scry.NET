@@ -1,7 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Tests;
 
@@ -202,14 +203,14 @@ public sealed class ConditionOperationTests
 
     private sealed class ConditionHost : IAsyncDisposable
     {
-        private ConditionHost(AgentHost host, ScryClient client, StringBuilder state)
+        private ConditionHost(EndpointHost host, ScryClient client, StringBuilder state)
         {
             Host = host;
             Client = client;
             State = state;
         }
 
-        public AgentHost Host { get; }
+        public EndpointHost Host { get; }
 
         public ScryClient Client { get; }
 
@@ -223,7 +224,7 @@ public sealed class ConditionOperationTests
         public static async Task<ConditionHost> StartAsync()
         {
             var state = new StringBuilder("ready");
-            var host = AgentHost.Start(builder => builder
+            var host = EndpointHost.Start(builder => builder
                 .RegisterValue("state", state)
                 .RegisterValue("counter", 7));
             var client = await ScryClient.ConnectAsync(host.DescriptorPath);

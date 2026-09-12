@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Tests;
 
@@ -149,23 +150,23 @@ public sealed class ScriptCacheTests
 
     private sealed class CacheHost : IAsyncDisposable
     {
-        private CacheHost(AgentHost host, ScryClient client)
+        private CacheHost(EndpointHost host, ScryClient client)
         {
             Host = host;
             Client = client;
         }
 
-        public AgentHost Host { get; }
+        public EndpointHost Host { get; }
 
         public ScryClient Client { get; }
 
         public static async Task<CacheHost> StartAsync(int? maximumCachedScripts = null)
         {
             var host = maximumCachedScripts is null
-                ? AgentHost.Start(builder => builder.RegisterValue("value", 1))
-                : AgentHost.Start(
+                ? EndpointHost.Start(builder => builder.RegisterValue("value", 1))
+                : EndpointHost.Start(
                     builder => builder.RegisterValue("value", 1),
-                    new AgentHostOptions { MaximumCachedScripts = maximumCachedScripts.Value });
+                    new EndpointOptions { MaximumCachedScripts = maximumCachedScripts.Value });
             var client = await ScryClient.ConnectAsync(host.DescriptorPath);
             return new(host, client);
         }

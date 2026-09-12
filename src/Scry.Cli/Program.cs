@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Scry.Contracts;
 using Scry.Injector;
-using Scry.Sdk;
+using Scry.Client;
 
 return await Cli.RunAsync(args);
 

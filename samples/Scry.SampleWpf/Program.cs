@@ -1,6 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
-using Scry.Sdk;
+using Scry.Endpoint;
 using Scry.Wpf;
 
 namespace Scry.SampleWpf;
@@ -21,7 +21,7 @@ internal static class Program
             Height = 240,
             Content = caption
         };
-        using var host = AgentHost.Start(
+        using var host = EndpointHost.Start(
             builder => builder
                 .RegisterRoot("editor", () => state, "Live document editor state.")
                 .RegisterValue("sample.kind", "wpf", "Identifies this embedded sample process.")
@@ -42,9 +42,9 @@ internal static class Program
                         return state.Title;
                     },
                     "Updates the editor title on the WPF dispatcher.",
-                    new AgentOperationPolicy
+                    new OperationPolicy
                     {
-                        ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+                        ExecutionPolicy = OperationExecutionPolicy.UiOwner,
                         RequiresConfirmation = true
                     })
                 .RegisterJobOperation(
@@ -68,13 +68,13 @@ internal static class Program
                         return state.LoadedDocuments;
                     },
                     "Loads a document asynchronously, then applies it on the WPF dispatcher.",
-                    new AgentOperationPolicy
+                    new OperationPolicy
                     {
-                        ExecutionPolicy = AgentOperationExecutionPolicy.UiOwner,
+                        ExecutionPolicy = OperationExecutionPolicy.UiOwner,
                         RequiresConfirmation = true
                     })
                 .UseWpf(application, wpf => wpf.RegisterWindow("main", window)),
-            new AgentHostOptions { Alias = alias, Aliases = ["scry-wpf-sample"] });
+            new EndpointOptions { Alias = alias, Aliases = ["scry-wpf-sample"] });
 
         Console.WriteLine($"Target: {host.TargetId}");
         Console.WriteLine($"Descriptor: {host.DescriptorPath}");

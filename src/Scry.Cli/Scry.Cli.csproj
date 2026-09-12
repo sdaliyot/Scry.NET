@@ -3,7 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Scry.Contracts\Scry.Contracts.csproj" />
     <ProjectReference Include="..\Scry.Injector\Scry.Injector.csproj" />
-    <ProjectReference Include="..\Scry.Sdk\Scry.Sdk.csproj" />
+    <ProjectReference Include="..\Scry.Client\Scry.Client.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -4,14 +4,14 @@ Scry.NET is a Windows-only developer and test framework for inspecting and delib
 
 Two hosting models are available:
 
-- **Embedded mode:** the target opts in with `Scry.Sdk`, registers described roots, values, and policy-tagged operations, and starts an `AgentHost`. Registrations can also be replaced or removed safely while the host is running.
-- **Attach mode (developer/test only):** `scry attach` loads an architecture-matched native bootstrap into an already-running managed process and starts the same `AgentHost` in its default AppDomain, so the target never references Scry.NET.
+- **Embedded mode:** the target opts in with `Scry.Endpoint`, registers described roots, values, and policy-tagged operations, and starts an `EndpointHost`. Registrations can also be replaced or removed safely while the host is running.
+- **Attach mode (developer/test only):** `scry attach` loads an architecture-matched native bootstrap into an already-running managed process and starts the same `EndpointHost` in its default AppDomain, so the target never references Scry.NET.
 
-The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, framework-neutral waits and assertions, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded SDK, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Sdk`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md).
+The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, framework-neutral waits and assertions, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded endpoint host, a standalone client, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Endpoint`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md).
 
 | Component | Supported targets |
 |---|---|
-| `Scry.Contracts`, `Scry.Runtime`, `Scry.Sdk` | .NET 9 and .NET Framework 4.7.2 |
+| `Scry.Contracts`, `Scry.Runtime`, `Scry.Endpoint`, `Scry.Client` | .NET 9 and .NET Framework 4.7.2 |
 | `Scry.SampleHost` | .NET 9 and .NET Framework 4.7.2 |
 | `Scry.Cli` | .NET 9 only; it can connect to either runtime |
 | `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) and .NET Framework 4.7.2 |
@@ -76,7 +76,7 @@ See [`docs/development.md`](docs/development.md) for protocol and extension guid
 Register the smallest intentional surface an agent needs. Root factories are evaluated per request, registered values retain a stable object, and operation descriptions and policy metadata are returned by `capabilities`:
 
 ```csharp
-using var host = AgentHost.Start(
+using var host = EndpointHost.Start(
     builder => builder
         .RegisterRoot("orders", () => orderState, "Current order processing state.")
         .RegisterValue("service.name", "checkout", "Stable service identity.")
@@ -84,8 +84,8 @@ using var host = AgentHost.Start(
             "orders.reprocess",
             ReprocessOrder,
             "Reprocesses one order.",
-            new AgentOperationPolicy { RequiresConfirmation = true }),
-    new AgentHostOptions { Alias = "checkout-worker" });
+            new OperationPolicy { RequiresConfirmation = true }),
+    new EndpointOptions { Alias = "checkout-worker" });
 ```
 
 Each registered operation reports `executionPolicy` (`worker-thread` or `ui-owner`), `isReadOnly`, and `requiresConfirmation`. These fields document the handler's contract; `ui-owner` means the handler or adapter performs the required marshalling, not that the core runtime guesses a dispatcher. Agents should call `roots` and `capabilities` first, prefer described read-only operations, request approval before confirmation-required operations, and avoid raw reflection mutation when a named helper exists.
@@ -97,7 +97,7 @@ host.Registrations.RegisterValue(
     "feature.flags",
     refreshedFlags,
     "Current feature flags.",
-    AgentRegistrationMode.ReplaceExisting);
+    RegistrationMode.ReplaceExisting);
 host.Registrations.UnregisterOperation("orders.reprocess");
 ```
 
@@ -119,13 +119,13 @@ Each prints `Target` and `Descriptor` on startup and exits cleanly when Enter is
 Reference only the adapter used by the target application, then register it while configuring the embedded host:
 
 ```csharp
-using var host = AgentHost.Start(builder => builder.UseWpf(
+using var host = EndpointHost.Start(builder => builder.UseWpf(
     Application.Current,
     wpf => wpf.RegisterWindow("main", Application.Current.MainWindow)));
 ```
 
 ```csharp
-using var host = AgentHost.Start(builder => builder.UseWinForms(
+using var host = EndpointHost.Start(builder => builder.UseWinForms(
     mainForm,
     winForms => winForms.RegisterRoot("main", mainForm)));
 ```

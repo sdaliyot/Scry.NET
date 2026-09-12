@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
 
 namespace Scry.Tests;
 
@@ -71,7 +71,7 @@ public sealed class CliContractTests
     public async Task Exit_codes_and_envelopes_distinguish_validation_target_and_operation_failures()
     {
         var cliPath = FindBuiltCli();
-        await using var host = AgentHost.Start(
+        await using var host = EndpointHost.Start(
             builder => builder
                 .RegisterOperation(
                     "fail",
@@ -86,7 +86,7 @@ public sealed class CliContractTests
                                 : null
                         },
                         ScryJson.Options)),
-            new AgentHostOptions { Alias = $"cli-contract-{Guid.NewGuid():N}" });
+            new EndpointOptions { Alias = $"cli-contract-{Guid.NewGuid():N}" });
 
         var success = await RunCliAsync(
             cliPath,

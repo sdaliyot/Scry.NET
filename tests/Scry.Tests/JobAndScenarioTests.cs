@@ -1,7 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Scry.Contracts;
-using Scry.Sdk;
+using Scry.Endpoint;
+using Scry.Client;
 
 namespace Scry.Tests;
 
@@ -322,12 +323,12 @@ public sealed class JobAndScenarioTests
 
     private sealed class JobTestHost : IAsyncDisposable
     {
-        private JobTestHost(AgentHost host)
+        private JobTestHost(EndpointHost host)
         {
             Host = host;
         }
 
-        public AgentHost Host { get; }
+        public EndpointHost Host { get; }
 
         public static JobTestHost Start(
             IReadOnlyList<string>? aliases = null,
@@ -336,7 +337,7 @@ public sealed class JobAndScenarioTests
             int maximumJobs = 32,
             int maximumLogs = 32)
         {
-            var host = AgentHost.Start(
+            var host = EndpointHost.Start(
                 builder => builder.RegisterJobOperation(
                     "work",
                     async (arguments, context) =>
@@ -351,7 +352,7 @@ public sealed class JobAndScenarioTests
                             context.CancellationToken);
                         return new { targetId = context.OperationId };
                     }),
-                new AgentHostOptions
+                new EndpointOptions
                 {
                     Alias = $"job-test-{Guid.NewGuid():N}",
                     Aliases = aliases ?? [],
