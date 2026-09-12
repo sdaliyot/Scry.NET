@@ -14,7 +14,8 @@
     <AssemblyName>Scry.AttachWpfTarget</AssemblyName>
     <RootNamespace>Scry.AttachWpfTarget</RootNamespace>
     <IsPackable>false</IsPackable>
-    <PlatformTarget>x64</PlatformTarget>
+    <!-- Overridable, so the same sample can be built x86 to exercise a 32-bit attach. -->
+    <PlatformTarget Condition="'$(PlatformTarget)' == ''">x64</PlatformTarget>
     <!-- No XAML here, so no markup compilation is needed; plain references are enough. -->
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
   </PropertyGroup>

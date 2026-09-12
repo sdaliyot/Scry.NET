@@ -34,6 +34,15 @@ public static class ProcessInspector
         using var process = GetProcess(processId);
         var startedAt = ReadStartTime(process);
         var architecture = InspectArchitecture(processId);
+
+        // Checked here rather than only by the caller, because the module enumeration below
+        // cannot run across a bitness boundary: a 32-bit injector reading a 64-bit process gets
+        // ERROR_PARTIAL_COPY, since the module list it is asked to copy holds pointers that do
+        // not fit. Left to fail there, a plain architecture mismatch would be reported as
+        // detection_inconclusive with a native error code, which says nothing about the actual
+        // problem or its fix.
+        EnsureCompatibleArchitecture(CurrentArchitecture, architecture);
+
         var runtimeFamily = ClassifyRuntime(EnumerateModuleNames(processId));
         return new(process.Id, process.ProcessName, startedAt, architecture, runtimeFamily);
     }
@@ -95,7 +104,10 @@ public static class ProcessInspector
             throw new InjectionException(
                 InjectionErrorCode.ArchitectureMismatch,
                 $"The {injector.ToString().ToLowerInvariant()} injector cannot attach to an " +
-                $"{target.ToString().ToLowerInvariant()} target. Run the architecture-matched injector.");
+                $"{target.ToString().ToLowerInvariant()} target. Injection writes into the target with " +
+                "the loader addresses of its own bitness, so the injector process must match. " +
+                $"Publish one with: dotnet publish src/Scry.Injector -c Release -f net9.0 " +
+                $"-r win-{target.ToString().ToLowerInvariant()} --self-contained false -o <dir>");
         }
     }
 

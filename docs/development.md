@@ -213,6 +213,17 @@ framework on purpose: the consumer picks one from the target's detected runtime,
 run the injector for the target architecture; an x64 process cannot safely inject an x86 target and
 vice versa.
 
+The default build produces an x64 injector. For a 32-bit target, publish the matching one - the
+payload and adapters are architecture-neutral and are staged into the publish directory alongside
+both native helpers:
+
+```powershell
+dotnet publish srcScry.Injector -c Release -f net9.0 -r win-x86 --self-contained false -o <dir>
+```
+
+It is framework-dependent, so the x86 .NET runtime must be installed. Attaching with a mismatched
+injector fails with `architecture_mismatch` before anything is written into the target.
+
 Build the native helper before the managed build, and use `-p:RequireNativeInjector=true` for
 Release and CI so a forgotten native build fails the build instead of silently producing a CLI that
 cannot attach:
@@ -260,7 +271,7 @@ Attach mode is local, invasive tooling for development and testing. It requires 
 Current limits:
 
 - The endpoint starts only in the default AppDomain/default CoreCLR load context.
-- Supported targets are .NET Framework 4.7.2 (or later 4.x) and .NET 9 on Windows x86/x64. x64 is verified end to end; x86 is implemented but unverified.
+- Supported targets are .NET Framework 4.7.2 (or later 4.x) and .NET 9 on Windows x86/x64, both verified end to end on both CLR families.
 - Secondary AppDomains, ARM64, cross-architecture injection, remote machines, unload/detach, and production packaging are not implemented.
 - Runtime detection requires the managed runtime to be loaded before attach.
 - Native dependency resolution and host policy can still be constrained by target-specific mitigations or hosting models; failures are reported rather than falling back to an unsafe runtime start.

@@ -50,14 +50,21 @@
   <!--
     Scoped to one TFM: this target is AfterTargets="Build", which runs once per target framework,
     so without the condition every payload and native helper would be staged twice.
+
+    RemoveProperties keeps this project's RuntimeIdentifier out of the payload and adapter
+    builds. Those are architecture-neutral by design - the payload is loaded by the target's own
+    CLR, whose bitness is the target's, not the injector's - and an x86 injector is published with
+    -r win-x86, a RID the payload has no target for, so inheriting it fails the restore outright.
   -->
   <Target Name="BuildInjectionPayloads" AfterTargets="Build"
           Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'">
     <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
              Targets="Build"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
              Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernTargetFramework)" />
     <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
              Targets="Build"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
              Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget)" />
 
     <!--
@@ -69,9 +76,11 @@
     -->
     <MSBuild Projects="..\Scry.Wpf\Scry.Wpf.csproj;..\Scry.WinForms\Scry.WinForms.csproj"
              Targets="Build"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
              Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernWindowsTargetFramework)" />
     <MSBuild Projects="..\Scry.Wpf\Scry.Wpf.csproj;..\Scry.WinForms\Scry.WinForms.csproj"
              Targets="Build"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
              Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget)" />
 
     <ItemGroup>
@@ -113,6 +122,28 @@
           SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(NativeX86)"
           DestinationFolder="$(TargetDir)native\win-x86"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Publish copies compile outputs only, so a published injector would arrive with no native
+    helper and no payload and fail every attach with missing_native_helper. Copy across what
+    Build already staged rather than re-deriving it, so the two layouts cannot drift.
+
+    This is what makes an x86 injector usable: the architecture-matched injector is obtained by
+    publishing with -r win-x86, and a publish that dropped its components would be inert.
+  -->
+  <Target Name="StageInjectionPayloadsForPublish" AfterTargets="Publish"
+          Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'">
+    <ItemGroup>
+      <StagedNative Include="$(TargetDir)native\**\*" />
+      <StagedPayload Include="$(TargetDir)payload\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StagedNative)"
+          DestinationFiles="@(StagedNative->'$(PublishDir)native\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(StagedPayload)"
+          DestinationFiles="@(StagedPayload->'$(PublishDir)payload\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
 

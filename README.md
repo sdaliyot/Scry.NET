@@ -15,13 +15,13 @@ The endpoint supports non-UI processes as a first-class scenario. The core packa
 | `Scry.SampleHost` | .NET 9 and .NET Framework 4.7.2 |
 | `Scry.Cli` | .NET 9 only; it can connect to either runtime |
 | `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) and .NET Framework 4.7.2 |
-| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on .NET 9 and attaches to Windows x86/x64 processes on .NET Framework 4.7.2 or .NET 9. x64 is verified end to end; x86 is implemented but unverified. |
+| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on .NET 9 and attaches to Windows x86/x64 processes on .NET Framework 4.7.2 or .NET 9. Both architectures are verified end to end, each with its own architecture-matched injector. |
 
 Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
 
 Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
 
-Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only (x64 verified, x86 unverified), .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
+Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
 
 Build and test:
 
