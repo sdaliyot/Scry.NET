@@ -255,7 +255,7 @@ WindowsDesktop shared framework being present in the target.
 `--adapters wpf` against a process with no WPF loaded is refused with an explanatory error, as is a
 WPF target whose `Application.Current` is null.
 
-Attach mode is local, invasive developer/test tooling. It requires the same Windows user and an equal or higher integrity level. Protected processes and process-mitigation policies can prohibit remote allocation, writes, thread creation, or DLL loading. Antivirus/EDR products commonly block or quarantine these exact primitives. Do not weaken security controls globally; authorize the binary or test in an isolated environment. Never attach to software you do not own or have explicit permission to test.
+Attach mode is local, invasive tooling for development and testing. It requires the same Windows user and an equal or higher integrity level. Protected processes and process-mitigation policies can prohibit remote allocation, writes, thread creation, or DLL loading. Antivirus/EDR products commonly block or quarantine these exact primitives. Do not weaken security controls globally; authorize the binary or test in an isolated environment. Never attach to software you do not own or have explicit permission to test.
 
 Current limits:
 

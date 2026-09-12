@@ -15,6 +15,9 @@
     <TasksExtensionsVersion>4.5.4</TasksExtensionsVersion>
     <NetFrameworkReferenceAssembliesVersion>1.0.3</NetFrameworkReferenceAssembliesVersion>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Authors>Shahar Daliyot</Authors>
+    <Copyright>Copyright (c) 2026 Shahar Daliyot</Copyright>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">

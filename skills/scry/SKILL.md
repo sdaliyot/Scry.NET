@@ -9,9 +9,16 @@ Use this Skill when an agent must inspect or control a running .NET application 
 opted into Scry.NET. The `scry` CLI is the only agent interface in this release. Do not
 connect to named pipes directly and do not read capability tokens from descriptor files.
 
-Scry.NET is Windows-only, local-only developer/test tooling. It can inspect private state,
-mutate objects, invoke methods, and execute C# inside the target process. Use it only on
+Scry.NET is Windows-only, local-only tooling for development and testing. It can inspect private
+state, mutate objects, invoke methods, and execute C# inside the target process. Use it only on
 applications the user deliberately started or enabled for development or testing.
+
+"Development and testing" is a matter of authorization, not capability: attach works against
+Release builds as readily as Debug ones. The rule is about what you are permitted to attach to,
+never about how the target was compiled. Two things do differ in a Release build, and both change
+what your expressions can rely on rather than whether attaching works: an obfuscated assembly
+breaks anything that names a member, and `#if DEBUG` code is absent, so the application itself may
+behave differently from a Debug build you tested against.
 
 ## Start safely
 

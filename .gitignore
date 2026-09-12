@@ -8,3 +8,6 @@ TestResults/
 *.nupkg
 artifacts/
 *.log
+
+# Ad hoc experiment files; one of these once held a test credential.
+scratch/
