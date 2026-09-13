@@ -1,77 +1,226 @@
 # Scry.NET
 
-Scry.NET is a Windows-only developer and test framework for inspecting and deliberately mutating a running managed application. Each target owns its endpoint and state; the stateless `scry` CLI connects over a local Windows named pipe.
+**Scry.NET gives your .NET application what the DevTools protocol gives a web or Node.js app:
+a live, external handle on a process that is already running.**
 
-Two hosting models are available:
+Connect to a running application and read its actual object graph, write to it, call its methods,
+run arbitrary C# inside it, walk its WPF or WinForms tree, and wait on or assert conditions - all
+from outside the process, over a versioned JSON protocol on a local named pipe. Not a log, not a
+snapshot, not a debugger stopping the world: the application keeps running while you ask it
+questions and it answers.
 
-- **Embedded mode:** the target opts in with `Scry.Endpoint`, registers described roots, values, and policy-tagged operations, and starts an `EndpointHost`. Registrations can also be replaced or removed safely while the host is running.
-- **Attach mode:** `scry attach` loads an architecture-matched native bootstrap into an already-running managed process and starts the same `EndpointHost` in its default AppDomain, so the target never references Scry.NET.
+It works on .NET 9 and .NET Framework 4.7.2, on Windows, x86 and x64.
 
-The endpoint supports non-UI processes as a first-class scenario. The core packages provide a versioned JSON protocol, current-user named-pipe transport, capability-token authentication, multi-process discovery with aliases, target-qualified sessions and leased handles, reflection inspection/mutation/invocation, collection pagination, framework-neutral waits and assertions, Roslyn-backed C# evaluation and statement execution, explicit assembly/type discovery, endpoint-owned long-running jobs, an embedded endpoint host, a standalone client, and a stateless JSON CLI with multi-target scenarios. Optional `Scry.Wpf` and `Scry.WinForms` packages add desktop UI inspection without adding UI framework references to `Scry.Contracts`, `Scry.Runtime`, or `Scry.Endpoint`. An agent Skill ships in [`skills/scry`](skills/scry/SKILL.md).
+## Two ways to get an endpoint into a process
+
+**Attach - inject into a process that has never heard of Scry.NET.**
+
+```powershell
+scry attach MyApp --adapters wpf
+```
+
+Nothing in your application changes. No package reference, no startup hook, no
+`#if DEBUG` block, no initialization order to get right - and therefore nothing to review, nothing
+to accidentally ship, and no chance of the tooling altering the behaviour you are trying to observe.
+You point it at a process that is already running, including a Release build, and it is
+instrumented a second later. This is the mode most people want.
+
+**Embedded - the application hosts the endpoint itself.**
+
+```csharp
+using var host = EndpointHost.Start(builder => builder
+    .RegisterRoot("orders", () => orderState, "Current order processing state."));
+```
+
+Here the application references `Scry.Endpoint` and decides exactly what is exposed: named,
+described roots, values and operations, each tagged with policy such as `IsReadOnly` or
+`RequiresConfirmation`. The advantage is curation. An agent meets a designed surface with
+documentation attached rather than raw reflection over your internals, dangerous operations
+announce themselves as dangerous, and the application controls whether the endpoint exists at all.
+
+**Both modes converge on the same `EndpointHost.Start`.** The protocol, every operation, the CLI and
+the Skill are identical either way, so the choice is about deployment, not capability.
+
+## Two ways it gets used
+
+**An AI agent validating its own work.** An agent that just changed code can check the running
+application instead of reasoning about what the change probably did - read the live state back,
+confirm the dialog really closed, see the value the view model actually holds. The workflow lives in
+[`skills/scry/SKILL.md`](skills/scry/SKILL.md).
+
+**Automated tests that reach further than conventional UI automation.** Conventional UI automation
+sees only what the accessibility tree exposes, identifies controls by position or automation id, and
+cannot read a view model or call a service. A Scry.NET test can drive the real controls *and* assert
+against internal state in the same run. Because `evaluate` and `execute` compile against the
+assemblies already loaded in the target, a renamed property fails as a compile error with a
+diagnostic rather than as a silent mis-click that passes.
+
+## It in action
+
+The same flow - attach to an app, fill in a login dialog, click the button, wait for the main
+window, read the UI tree back - written both ways.
+
+### As a test would, in C#
+
+```csharp
+// Attach to a running application that has never heard of Scry.NET.
+var attach = await AttachService.AttachAsync("MyApp", alias: "app", adapters: "wpf");
+await using var client = await ScryClient.ConnectAsync(attach.Descriptor!);
+
+// Type into the real PasswordBox, on the UI thread that owns it.
+await client.ExecuteAsync(new ExecutionRequest(
+    """
+    var box = (System.Windows.Controls.PasswordBox)
+        System.Windows.Application.Current.MainWindow.FindName("Password");
+    box.Password = Environment.GetEnvironmentVariable("APP_TEST_PASSWORD");
+    """,
+    Marshal: ExecutionMarshalTargets.UiThread));
+
+// Clicking is a separate submission on purpose: a binding updates on a later dispatcher turn,
+// so clicking in the same submission would send the password the screen held *before* the line
+// above - silently, with no error.
+await client.ExecuteAsync(new ExecutionRequest(
+    """
+    var button = (System.Windows.Controls.Button)
+        System.Windows.Application.Current.MainWindow.FindName("LoginButton");
+    var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(button);
+    var invoker = (System.Windows.Automation.Provider.IInvokeProvider)
+        peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke);
+    invoker.Invoke();
+    """,
+    Marshal: ExecutionMarshalTargets.UiThread));
+
+// Wait for the shell window, then read the whole visual tree back as JSON.
+await client.RequestAsync("wait", new
+{
+    source = """
+        System.Windows.Application.Current.Windows.Cast<System.Windows.Window>()
+            .Any(w => w.GetType().Name == "ShellWindow" && w.IsVisible)
+        """,
+    timeoutMilliseconds = 60_000,
+    marshal = "ui"
+});
+
+var tree = await client.RequestAsync("wpf.snapshot", new { });
+```
+
+### As an agent would, through the CLI
+
+```powershell
+scry attach MyApp --alias app --adapters wpf
+scry execute --target app --request set-password.json
+scry execute --target app --request click-login.json
+scry wait --target app --request shell-window.json
+scry wpf.snapshot --target app --request snapshot.json
+```
+
+Each request file holds the same JSON the C# above builds - for example `set-password.json` is
+`{"source": "...", "marshal": "ui"}`. Requests come from files or stdin rather than inline
+arguments, deliberately: it keeps source and credentials off the command line, off the process
+list and out of shell history. `snapshot.json` can simply be `{}`, which defaults to the main
+window.
+
+The CLI is a thin client over the same protocol as `ScryClient`, so neither audience can do
+anything the other cannot.
+
+## Getting started
+
+Packaging is not done yet. For now, build from source and run the CLI out of the repository -
+[`docs/development.md`](docs/development.md) has the full build, including the native helper that
+attach mode requires.
+
+When packaging lands there will be two routes: a NuGet package for test projects that reference
+`Scry.Client` and `Scry.Injector` directly, and a plugin install for agents that want the Skill.
+Until then, examples written as `scry ...` assume the built CLI is on your `PATH`; from a clone,
+`dotnet run --project src\Scry.Cli -- ...` is the equivalent.
+
+## Architecture
+
+The question that matters most is which assemblies end up inside your application. In attach mode
+that is `Scry.Injector.Payload`, `Scry.Endpoint`, `Scry.Runtime` and `Scry.Contracts` - plus one
+desktop adapter if you asked for one. Everything else stays in the tool process.
+
+```mermaid
+flowchart TB
+  subgraph tool["Tool process - your test runner, or an agent's shell"]
+    direction LR
+    cli["scry<br/>the JSON command line"]
+    cl["Scry.Client"]
+    inj["Scry.Injector"]
+  end
+
+  native["Scry.Injector.Native - native bootstrap DLL, x86 / x64<br/>starts the CLR inside the target"]
+
+  subgraph target["Your application's process - nothing here was changed"]
+    direction LR
+    pay["Scry.Injector.Payload"]
+    ep["Scry.Endpoint"]
+    rt["Scry.Runtime"]
+    ad["Scry.Wpf / Scry.WinForms<br/>optional"]
+  end
+
+  shared["Scry.Contracts - the wire contract, loaded on both sides"]
+
+  cli --> cl
+  cli --> inj
+  inj -. "CreateRemoteThread" .-> native
+  native -. "loads by name" .-> pay
+  pay -. "reflection: UseWpf" .-> ad
+  pay --> ep
+  ad --> ep
+  ep --> rt
+  cl <-. "named pipe, versioned JSON" .-> rt
+  cl --- shared
+  rt --- shared
+```
+
+Solid arrows are compile-time references. Dashed arrows are resolved at runtime by name - the
+native export, the payload entry point and the adapter extension methods are all located by string,
+so renaming one breaks attach silently rather than at build time.
+
+In embedded mode the picture is the same minus `Scry.Injector.Payload` and the native bootstrap:
+your application references `Scry.Endpoint` directly and calls `EndpointHost.Start` itself.
+
+| Component | Runs in | Responsibility |
+|---|---|---|
+| `Scry.Contracts` | both | The wire contract: request/response records, value projections, framing, descriptors. The only assembly both sides share. |
+| `Scry.Runtime` | target | The engine. Owns the named-pipe server, the discovery descriptor, sessions and leased handles, reflection, and the Roslyn scripting host. The only project that references the C# compiler. |
+| `Scry.Endpoint` | target | The hosting surface. `EndpointHost.Start`, the registration builder, and runtime registration changes. Where both modes meet. |
+| `Scry.Injector.Payload` | target | Attach-mode beachhead. Loaded by the native bootstrap, decodes its configuration, wires any requested adapter, and calls `EndpointHost.Start`. Exists only to be injected. |
+| `Scry.Wpf`, `Scry.WinForms` | target | Optional adapters adding `wpf.*` / `winforms.*` tree projection, waits, assertions and screenshots, and the UI-thread marshaller. |
+| `Scry.Client` | tool | The connecting client. References `Scry.Contracts` and nothing else, so a test project gets a pipe client without the compiler. |
+| `Scry.Injector` | tool | Inspects the target's architecture and CLR, refuses unsafe or ambiguous cases, and performs the injection. |
+| `Scry.Cli` (`scry`) | tool | The stateless JSON command line, and the interface agents use. |
+| `Scry.Injector.Native` | crosses | Native DLL loaded into the target, which starts the CLR there - `ExecuteInDefaultAppDomain` on .NET Framework, `hostfxr` on .NET 9 - and calls the payload. |
+
+`Scry.Client` depending on `Scry.Contracts` alone is deliberate. `Scry.Runtime` is the sole carrier
+of `Microsoft.CodeAnalysis.CSharp.Scripting`, so keeping the client off it is what lets a test
+project reference Scry.NET without pulling roughly ten megabytes of compiler into its output.
 
 | Component | Supported targets |
 |---|---|
 | `Scry.Contracts`, `Scry.Runtime`, `Scry.Endpoint`, `Scry.Client` | .NET 9 and .NET Framework 4.7.2 |
-| `Scry.SampleHost` | .NET 9 and .NET Framework 4.7.2 |
-| `Scry.Cli` | .NET 9 only; it can connect to either runtime |
 | `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) and .NET Framework 4.7.2 |
-| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on .NET 9 and attaches to Windows x86/x64 processes on .NET Framework 4.7.2 or .NET 9. Both architectures are verified end to end, each with its own architecture-matched injector. |
-
-Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
-
-Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
-
-Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
-
-Build and test:
-
-```powershell
-dotnet build Scry.sln
-dotnet test Scry.sln --no-build
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
-dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
-dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
-```
-
-Run any embedded sample, then use the emitted descriptor path:
-
-```powershell
-dotnet run --project src\Scry.Cli -- capabilities --descriptor <path>
-dotnet run --project src\Scry.Cli -- roots --descriptor <path>
-dotnet run --project src\Scry.Cli -- evaluate --descriptor <path> --source expression.csx
-Get-Content statements.csx | dotnet run --project src\Scry.Cli -- execute --descriptor <path>
-dotnet run --project src\Scry.Cli -- jobs start --target scry-sample --request job-start.json
-dotnet run --project src\Scry.Cli -- scenario --input scenario.json
-```
-
-Run `scry --help` or `scry help <command>` for examples and the stable exit-code contract.
-`scry schema` emits the deterministic machine-readable command, argument, request, result,
-and exit-code catalog. Request payloads should come from `--request <file|->` (or
-`--input`) and C# source from `--source <file|->` or redirected stdin; agents never need
-to put source or secrets on a command line. Direct `wpf.*` and `winforms.*` CLI commands
-translate to their registered structured operations and return their structured adapter
-result inline before the ephemeral CLI session closes.
-
-AI coding agents should follow the comprehensive
-[`skills/scry/SKILL.md`](skills/scry/SKILL.md) workflow. It covers discovery and safe
-target selection, structured inspection before code execution, desktop and non-UI
-recipes, waits/assertions, jobs, multi-process scenarios, retries, expected JSON shapes,
-and security boundaries.
+| `Scry.Cli` | .NET 9 only; it connects to either runtime |
+| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on .NET 9 or .NET Framework 4.7.2 and attaches to x86 or x64 processes on either runtime. Both architectures are verified end to end, each with its own architecture-matched injector. |
 
 ## Attaching to a process that does not reference Scry
 
 ```powershell
-dotnet run --project src\Scry.Cli -c Release -- attach <pid-or-process-name> [--adapters wpf|winforms]
+scry attach <pid-or-process-name> [--alias <name>] [--adapters wpf|winforms]
 ```
 
-The command injects the endpoint, waits for its discovery descriptor, performs a real protocol handshake, and prints structured JSON without exposing the capability token. Build the architecture-matched native helpers first as described in [`docs/development.md`](docs/development.md).
+The command inspects the target, injects the endpoint, waits for its discovery descriptor, performs
+a real protocol handshake, and prints structured JSON without exposing the capability token. Build
+the architecture-matched native helpers first, as described in
+[`docs/development.md`](docs/development.md).
 
-Pass `--adapters wpf` (or `winforms`) to wire the matching desktop adapter inside the target. Without it an attached endpoint has only the framework-neutral surface, so `wpf.*` operations are absent and `evaluate`/`execute` cannot use `"marshal": "ui"` - which means they cannot touch a `DependencyObject` or a `Control` at all. The adapter needs no cooperation from the target application: it discovers `Application.Current.Windows` and reuses the target's existing dispatcher.
+Pass `--adapters wpf` (or `winforms`) to wire the matching desktop adapter inside the target;
+see [Optional desktop adapters](#optional-desktop-adapters) for what that adds and why it is not
+automatic. The adapter needs no cooperation from the application - it discovers
+`Application.Current.Windows` and reuses the target's existing dispatcher.
 
-See [`docs/development.md`](docs/development.md) for protocol and extension guidance.
-
-## Embedded SDK
+## Embedded host
 
 Register the smallest intentional surface an agent needs. Root factories are evaluated per request, registered values retain a stable object, and operation descriptions and policy metadata are returned by `capabilities`:
 
@@ -103,17 +252,6 @@ host.Registrations.UnregisterOperation("orders.reprocess");
 
 Duplicate registration throws unless `ReplaceExisting` is selected. Replacement affects subsequent lookups; existing leased references remain valid until released or expired. Unregistration is idempotent through its `bool` result and does not revoke already leased objects or stop an operation/job that has already started.
 
-Runnable integrations cover every supported process style:
-
-| Sample | Process type | Domain flow |
-|---|---|---|
-| `samples\Scry.SampleHost` | Console | Set/inspect a counter, run a recalculation job |
-| `samples\Scry.SampleWorker` | Long-running worker | Change queue mode, inspect heartbeats, drain work as a job |
-| `samples\Scry.SampleWpf` | WPF | Update dispatcher-owned editor state, assert projected UI, load as a job |
-| `samples\Scry.SampleWinForms` | WinForms | Update owner-thread order state, assert controls, import as a job |
-
-Each prints `Target` and `Descriptor` on startup and exits cleanly when Enter is sent. See the development guide for complete adoption and validation flows.
-
 ## Optional desktop adapters
 
 Reference only the adapter used by the target application, then register it while configuring the embedded host:
@@ -129,6 +267,11 @@ using var host = EndpointHost.Start(builder => builder.UseWinForms(
     mainForm,
     winForms => winForms.RegisterRoot("main", mainForm)));
 ```
+
+In attach mode `--adapters` does the same thing reflectively. It is explicit rather than automatic
+because without an adapter an attached endpoint has only the framework-neutral surface: `wpf.*`
+operations are absent, and `evaluate`/`execute` cannot use `"marshal": "ui"` - which means they
+cannot touch a `DependencyObject` or a `Control` at all.
 
 The adapters register `wpf.*` or `winforms.*` snapshot, wait, assertion, and screenshot operations as read-only, `ui-owner` helpers. Their projections are deliberately bounded and framework-specific. WPF visual and logical trees are separate views; WinForms exposes managed controls, open/owned forms, tool strips and menus, and bindings. Neither adapter claims to represent owner-drawn pixels, WebView2/ActiveX content, native child windows, popups/separate HWNDs, or out-of-process surfaces completely.
 
@@ -146,7 +289,7 @@ scry assert --target app --request assert-count.json
 ```
 
 `wait` polls until the condition holds or `timeoutMilliseconds` elapses, and reports a timeout as a
-successful response carrying `satisfied: false` — read the flag, do not infer it from the exit code.
+successful response carrying `satisfied: false` - read the flag, do not infer it from the exit code.
 Repeating a submission reuses its compiled script, so polling costs about the poll interval rather
 than a recompile per attempt; `evaluate`/`execute` results carry `compilationCached` to distinguish
 a reused script from a cold compile.
@@ -164,7 +307,7 @@ rule, not an endpoint restriction.
 Add `"marshal": "ui"` to run on the target's UI thread instead:
 
 ```powershell
-scry evaluate --descriptor <path> --json '{"source":"System.Windows.Application.Current.MainWindow.Title","marshal":"ui"}'
+scry evaluate --target app --request evaluate-title.json
 ```
 
 Registering `UseWpf` or `UseWinForms`, or attaching with `--adapters`, enables this; a capabilities
@@ -174,8 +317,69 @@ and an unrecognised target is refused with `marshal_target_not_supported`.
 
 Two consequences worth knowing. A marshalled `evaluate`/`execute` **occupies the UI thread** for the
 whole submission, so a long-running or looping script freezes the target, and `TimeoutMilliseconds`
-cannot interrupt work already running there — keep marshalled submissions short. Such a submission
+cannot interrupt work already running there - keep marshalled submissions short. Such a submission
 both *starts* and *resumes* there: a marshalled script that awaits comes back to the UI thread rather
 than falling onto the thread pool mid-way. `wait` is the exception by design: it marshals each
 evaluation rather than the polling loop, so a long marshalled wait never holds the UI thread between
 attempts.
+
+## Samples
+
+Two kinds. The embedded samples host an endpoint themselves and show what registration looks like
+per process style; the attach targets deliberately contain **no** reference to any Scry assembly,
+which is the only honest way to demonstrate that attach mode works on an application that is not
+cooperating.
+
+| Sample | Process type | Shows |
+|---|---|---|
+| `samples\Scry.SampleHost` | Console, .NET 9 and 4.7.2 | Set/inspect a counter, run a recalculation job |
+| `samples\Scry.SampleWorker` | Long-running worker, .NET 9 | Change queue mode, inspect heartbeats, drain work as a job |
+| `samples\Scry.SampleWpf` | WPF, .NET 9 | Update dispatcher-owned editor state, assert projected UI, load as a job |
+| `samples\Scry.SampleWinForms` | WinForms, .NET 9 | Update owner-thread order state, assert controls, import as a job |
+| `samples\Scry.AttachTarget` | Console, .NET 9 and 4.7.2 | An attach victim with no Scry reference; prints its pid and waits |
+| `samples\Scry.AttachWpfTarget` | WPF, .NET Framework 4.7.2 | An uncooperative WPF app with no Scry reference, for `--adapters wpf` |
+
+The embedded samples print `Target` and `Descriptor` on startup and exit cleanly when Enter is sent.
+See the development guide for complete adoption and validation flows.
+
+## Using the CLI
+
+Run `scry --help` or `scry help <command>` for examples and the stable exit-code contract.
+`scry schema` emits the deterministic machine-readable command, argument, request, result,
+and exit-code catalog. Request payloads should come from `--request <file|->` (or
+`--input`) and C# source from `--source <file|->` or redirected stdin; agents never need
+to put source or secrets on a command line. Direct `wpf.*` and `winforms.*` CLI commands
+translate to their registered structured operations and return their structured adapter
+result inline before the ephemeral CLI session closes.
+
+AI coding agents should follow the comprehensive
+[`skills/scry/SKILL.md`](skills/scry/SKILL.md) workflow. It covers discovery and safe
+target selection, structured inspection before code execution, desktop and non-UI
+recipes, waits/assertions, jobs, multi-process scenarios, retries, expected JSON shapes,
+and security boundaries.
+
+See [`docs/development.md`](docs/development.md) for the protocol, extension guidance, jobs,
+multi-target scenarios and assembly loading.
+
+## Security, authorization and limits
+
+Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
+
+Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
+
+Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
+
+## Build and test
+
+```powershell
+dotnet build Scry.sln
+dotnet test Scry.sln --no-build
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
+dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
+```
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
