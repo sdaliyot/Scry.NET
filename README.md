@@ -1,13 +1,28 @@
 # Scry.NET
 
 **Scry.NET gives your .NET application what the DevTools protocol gives a web or Node.js app:
-a live, external handle on a process that is already running.**
+a live, external handle on a process that is already running - built for the two things people
+actually need one for. AI agents that must check their own work against the real application
+rather than reason about what a change probably did, through the
+[agent Skill](skills/scry/SKILL.md) that ships with it. And automated tests that need to reach
+past the UI into the state behind it.**
 
 Connect to a running application and read its actual object graph, write to it, call its methods,
 run arbitrary C# inside it, walk its WPF or WinForms tree, and wait on or assert conditions - all
 from outside the process, over a versioned JSON protocol on a local named pipe. Not a log, not a
 snapshot, not a debugger stopping the world: the application keeps running while you ask it
 questions and it answers.
+
+**It is not only for UI applications.** A console host, a Windows service, a background worker or
+an API process is a first-class target: `wait` and `assert` evaluate C# rather than inspect a
+control tree, so they work where there is no UI at all. The desktop adapters are optional extras,
+not the point. See `samples\Scry.SampleWorker` and `samples\Scry.SampleHost`.
+
+**And one agent, or one test, can hold several processes at once.** `scry scenario` runs a list of
+commands in which each one names its own target, sequentially or concurrently, and `ScryClient` can
+keep connections to several endpoints open together. So a single run can click the button in the
+desktop client and then assert - in the server process - that the request actually arrived and the
+record actually changed. End-to-end across the tiers, in one flow, with no log scraping in between.
 
 It works on .NET 9 and .NET Framework 4.7.2, on Windows, x86 and x64.
 
@@ -18,6 +33,10 @@ It works on .NET 9 and .NET Framework 4.7.2, on Windows, x86 and x64.
 ```powershell
 scry attach MyApp --adapters wpf
 ```
+
+`scry` is the library's command line, and `scry attach` is how injection is performed - the same
+command an agent runs, and the same one a test can shell out to or call in-process through
+`AttachService`.
 
 Nothing in your application changes. No package reference, no startup hook, no
 `#if DEBUG` block, no initialization order to get right - and therefore nothing to review, nothing
@@ -34,9 +53,15 @@ using var host = EndpointHost.Start(builder => builder
 
 Here the application references `Scry.Endpoint` and decides exactly what is exposed: named,
 described roots, values and operations, each tagged with policy such as `IsReadOnly` or
-`RequiresConfirmation`. The advantage is curation. An agent meets a designed surface with
-documentation attached rather than raw reflection over your internals, dangerous operations
-announce themselves as dangerous, and the application controls whether the endpoint exists at all.
+`RequiresConfirmation`. An agent meets a designed surface with documentation attached rather than
+raw reflection over your internals, dangerous operations announce themselves as dangerous, and the
+application controls whether the endpoint exists at all.
+
+It also reaches things attach mode cannot. Attaching can only start from an object something
+*static* points at - a static field, a singleton, `Application.Current` - because there is no
+heap-walking operation. An object held only in a local variable or handed out by a dependency
+injection container has no such path. Registering it closes over the reference directly, so it
+becomes addressable by name. See [Embedded host](#embedded-host) for a worked example.
 
 **Both modes converge on the same `EndpointHost.Start`.** The protocol, every operation, the CLI and
 the Skill are identical either way, so the choice is about deployment, not capability.
@@ -58,7 +83,7 @@ diagnostic rather than as a silent mis-click that passes.
 ## It in action
 
 The same flow - attach to an app, fill in a login dialog, click the button, wait for the main
-window, read the UI tree back - written both ways.
+window, then read the UI tree back and capture a screenshot - written both ways.
 
 ### As a test would, in C#
 
@@ -90,18 +115,24 @@ await client.ExecuteAsync(new ExecutionRequest(
     """,
     Marshal: ExecutionMarshalTargets.UiThread));
 
-// Wait for the shell window, then read the whole visual tree back as JSON.
+// Wait for the main window, then read the whole visual tree back as JSON.
 await client.RequestAsync("wait", new
 {
     source = """
         System.Windows.Application.Current.Windows.Cast<System.Windows.Window>()
-            .Any(w => w.GetType().Name == "ShellWindow" && w.IsVisible)
+            .Any(w => w.GetType().Name == "MainWindow" && w.IsVisible)
         """,
     timeoutMilliseconds = 60_000,
     marshal = "ui"
 });
 
+// Read the structure back as JSON, and take a picture of it. Different questions: the
+// snapshot says what the tree contains, the screenshot says what it looked like.
 var tree = await client.RequestAsync("wpf.snapshot", new { });
+
+var shot = await client.RequestAsync("wpf.screenshot", new { });
+var png = shot.Result!.Value.GetProperty("base64Data").GetString();
+File.WriteAllBytes("login-failed.png", Convert.FromBase64String(png!));
 ```
 
 ### As an agent would, through the CLI
@@ -110,15 +141,17 @@ var tree = await client.RequestAsync("wpf.snapshot", new { });
 scry attach MyApp --alias app --adapters wpf
 scry execute --target app --request set-password.json
 scry execute --target app --request click-login.json
-scry wait --target app --request shell-window.json
-scry wpf.snapshot --target app --request snapshot.json
+scry wait --target app --request main-window.json
+scry wpf.snapshot --target app --request empty.json
+scry wpf.screenshot --target app --request empty.json
 ```
 
 Each request file holds the same JSON the C# above builds - for example `set-password.json` is
 `{"source": "...", "marshal": "ui"}`. Requests come from files or stdin rather than inline
 arguments, deliberately: it keeps source and credentials off the command line, off the process
-list and out of shell history. `snapshot.json` can simply be `{}`, which defaults to the main
-window.
+list and out of shell history. `empty.json` really is just `{}` - both snapshot and screenshot
+default to the application main window, which matters when attached, because an injected target
+has no registered roots to name. The screenshot comes back as base64 PNG in `base64Data`.
 
 The CLI is a thin client over the same protocol as `ScryClient`, so neither audience can do
 anything the other cannot.
@@ -149,14 +182,12 @@ flowchart TB
     inj["Scry.Injector"]
   end
 
-  native["Scry.Injector.Native - native bootstrap DLL, x86 / x64<br/>starts the CLR inside the target"]
-
   subgraph target["Your application's process - nothing here was changed"]
-    direction LR
+    native["Scry.Injector.Native<br/>native bootstrap DLL, x86 / x64"]
     pay["Scry.Injector.Payload"]
-    ep["Scry.Endpoint"]
-    rt["Scry.Runtime"]
-    ad["Scry.Wpf / Scry.WinForms<br/>optional"]
+    ad["Scry.Wpf / Scry.WinForms<br/>optional adapters"]
+    ep["Scry.Endpoint - what your code calls"]
+    rt["Scry.Runtime - serves the pipe"]
   end
 
   shared["Scry.Contracts - the wire contract, loaded on both sides"]
@@ -164,19 +195,29 @@ flowchart TB
   cli --> cl
   cli --> inj
   inj -. "CreateRemoteThread" .-> native
-  native -. "loads by name" .-> pay
+  native -. "starts the CLR, loads by name" .-> pay
   pay -. "reflection: UseWpf" .-> ad
   pay --> ep
   ad --> ep
   ep --> rt
-  cl <-. "named pipe, versioned JSON" .-> rt
-  cl --- shared
-  rt --- shared
+  cl -. "requests over a named pipe" .-> rt
+  cl --> shared
+  rt --> shared
 ```
 
 Solid arrows are compile-time references. Dashed arrows are resolved at runtime by name - the
 native export, the payload entry point and the adapter extension methods are all located by string,
 so renaming one breaks attach silently rather than at build time.
+
+The pipe arrow points one way on purpose. The protocol is strictly request and response: the target
+never initiates a message, and the frame envelope has no way to express one. Even `job.wait` is a
+long poll - the client asks, the target replies late, and the reply carries a `timedOut` flag so the
+client knows to ask again. Nothing is pushed.
+
+`Scry.Endpoint` and `Scry.Runtime` are stacked rather than side by side because they are layers, not
+peers. `Scry.Endpoint` is the surface your application calls - `EndpointHost.Start`, the registration
+builder - and holds no transport code at all; `Scry.Runtime` underneath it owns the named pipe, the
+descriptor and the execution engine. That is why the client's arrow lands on `Scry.Runtime`.
 
 In embedded mode the picture is the same minus `Scry.Injector.Payload` and the native bootstrap:
 your application references `Scry.Endpoint` directly and calls `EndpointHost.Start` itself.
@@ -188,10 +229,10 @@ your application references `Scry.Endpoint` directly and calls `EndpointHost.Sta
 | `Scry.Endpoint` | target | The hosting surface. `EndpointHost.Start`, the registration builder, and runtime registration changes. Where both modes meet. |
 | `Scry.Injector.Payload` | target | Attach-mode beachhead. Loaded by the native bootstrap, decodes its configuration, wires any requested adapter, and calls `EndpointHost.Start`. Exists only to be injected. |
 | `Scry.Wpf`, `Scry.WinForms` | target | Optional adapters adding `wpf.*` / `winforms.*` tree projection, waits, assertions and screenshots, and the UI-thread marshaller. |
-| `Scry.Client` | tool | The connecting client. References `Scry.Contracts` and nothing else, so a test project gets a pipe client without the compiler. |
+| `Scry.Client` | tool | The connecting client: opens the pipe, performs the handshake, and sends requests. References only `Scry.Contracts`. |
 | `Scry.Injector` | tool | Inspects the target's architecture and CLR, refuses unsafe or ambiguous cases, and performs the injection. |
 | `Scry.Cli` (`scry`) | tool | The stateless JSON command line, and the interface agents use. |
-| `Scry.Injector.Native` | crosses | Native DLL loaded into the target, which starts the CLR there - `ExecuteInDefaultAppDomain` on .NET Framework, `hostfxr` on .NET 9 - and calls the payload. |
+| `Scry.Injector.Native` | target | Native DLL injected into the target, where it starts the CLR - `ExecuteInDefaultAppDomain` on .NET Framework, `hostfxr` on .NET 9 - and calls the payload. The injector also maps a local copy, but only to compute the export offset before rebasing it into the remote module; it executes only in the target. |
 
 `Scry.Client` depending on `Scry.Contracts` alone is deliberate. `Scry.Runtime` is the sole carrier
 of `Microsoft.CodeAnalysis.CSharp.Scripting`, so keeping the client off it is what lets a test
@@ -236,6 +277,32 @@ using var host = EndpointHost.Start(
             new OperationPolicy { RequiresConfirmation = true }),
     new EndpointOptions { Alias = "checkout-worker" });
 ```
+
+### Reaching objects nothing static points at
+
+This is what embedded mode can do that attaching cannot. `samples\Scry.SampleWorker` opens like
+any ordinary program:
+
+```csharp
+var state = new WorkerState();                 // a local in Main
+var worker = RunWorkerAsync(state, stopping.Token);   // passed by parameter, and that is all
+
+await using var host = EndpointHost.Start(builder => builder
+    .RegisterRoot("worker", () => state, "Live queue worker state."));
+```
+
+Nothing static refers to `state` - no static field, no singleton, no container. An attached endpoint
+could not get to it from any direction, because reaching an object means walking to it from
+something named, and there is no operation that walks the heap looking for instances.
+
+Registering it closes over the reference, and from then on it is simply `worker`: `scry inspect
+--target scry-worker-sample` reads its members, `get` and `set` reach its fields. The same applies to a
+service resolved from a dependency-injection container, a per-request context, or any object whose
+lifetime is a local one.
+
+The factory form matters here. `RegisterRoot` takes a `Func<object?>` evaluated per request, so
+registering something that gets replaced - a current session, a reloaded configuration - always
+reads the current one rather than pinning whichever instance existed at startup.
 
 Each registered operation reports `executionPolicy` (`worker-thread` or `ui-owner`), `isReadOnly`, and `requiresConfirmation`. These fields document the handler's contract; `ui-owner` means the handler or adapter performs the required marshalling, not that the core runtime guesses a dispatcher. Agents should call `roots` and `capabilities` first, prefer described read-only operations, request approval before confirmation-required operations, and avoid raw reflection mutation when a named helper exists.
 
@@ -348,7 +415,21 @@ Run `scry --help` or `scry help <command>` for examples and the stable exit-code
 `scry schema` emits the deterministic machine-readable command, argument, request, result,
 and exit-code catalog. Request payloads should come from `--request <file|->` (or
 `--input`) and C# source from `--source <file|->` or redirected stdin; agents never need
-to put source or secrets on a command line. Direct `wpf.*` and `winforms.*` CLI commands
+to put source or secrets on a command line.
+
+`<file|->` means the option takes either a path to read, or the single character `-` to read
+standard input instead:
+
+```powershell
+scry evaluate --target app --source expression.csx     # read the file
+Get-Content expression.csx | scry evaluate --target app --source -
+```
+
+One distinction is worth knowing for `evaluate` and `execute`, because the two look alike and mean
+different things. Piping in with no option at all treats the input as **C# source**, the same as
+`--source -`. Passing `--request -` reads the very same bytes as a **JSON request object**, so that
+is the form to use when the submission needs fields alongside the source, such as
+`"marshal": "ui"`. Direct `wpf.*` and `winforms.*` CLI commands
 translate to their registered structured operations and return their structured adapter
 result inline before the ephemeral CLI session closes.
 

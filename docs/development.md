@@ -205,6 +205,12 @@ Build both helpers before the managed Release build:
 dotnet build Scry.sln -c Release
 ```
 
+Two separate commands because `Scry.Injector.Native` is a vcxproj and is deliberately not a member
+of `Scry.sln`. A vcxproj imports the C++ targets through `$(VCTargetsPath)`, which the .NET CLI does
+not ship, so putting it in the solution would break `dotnet build`, `dotnet test` and `dotnet format`
+over that solution at evaluation time. It is built with full MSBuild by `build-native.ps1`, and the
+managed build consumes its output by path rather than through a project reference.
+
 The managed build stages the x86/x64 helpers and the complete `payload\netfx` and `payload\net`
 directories beside `scry-injector`. Those directories are named by CLR family rather than by target
 framework on purpose: the consumer picks one from the target's detected runtime, so retargeting the

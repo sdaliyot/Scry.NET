@@ -297,7 +297,7 @@ internal static class CliContract
             "wpf.screenshot",
             "Capture a bounded WPF root screenshot.",
             [
-                F("root", "string", true, "Registered WPF root."),
+                F("root", "string", false, "Registered WPF root. Defaults to the application main window, or to the only root when there is exactly one; required only when the target has several roots and no main window."),
                 F("path", "string", false, "Projected node path within the root."),
                 F("tree", "visual|logical", false, "Tree kind used to resolve path.")
             ],
@@ -321,7 +321,7 @@ internal static class CliContract
             "winforms.screenshot",
             "Capture a bounded WinForms root screenshot.",
             [
-                F("root", "string", true, "Registered WinForms root."),
+                F("root", "string", false, "Registered WinForms root. Defaults to the only root when there is exactly one; required when the target has several."),
                 F("path", "string", false, "Projected control path within the root.")
             ],
             "WinFormsScreenshot.")
