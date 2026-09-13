@@ -232,6 +232,46 @@ public sealed class CliContractTests
                 .GetString());
     }
 
+    /// <summary>
+    /// The schema is what an agent is told to trust for request fields, so a field that exists on
+    /// the wire but is missing from the schema is not a documentation nit - it makes a working
+    /// capability invisible. That happened: <c>marshal</c> was absent from evaluate and execute
+    /// while being present on assert and wait, which told agents those two submissions could not
+    /// reach the UI thread, and therefore could not touch a DependencyObject or a Control at all.
+    /// Comparing against the contract type catches the next omission instead of a reader doing it.
+    /// </summary>
+    [Fact]
+    public async Task Schema_documents_every_execution_request_field()
+    {
+        var schemaRun = await RunCliAsync(FindBuiltCli(), ["schema"]);
+        Assert.Equal(0, schemaRun.ExitCode);
+
+        var expected = typeof(ExecutionRequest)
+            .GetProperties()
+            .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name))
+            .ToHashSet(StringComparer.Ordinal);
+
+        using var schema = JsonDocument.Parse(schemaRun.StandardOutput);
+        var commands = schema.RootElement.GetProperty("commands").EnumerateArray().ToArray();
+
+        foreach (var name in new[] { "evaluate", "execute" })
+        {
+            var command = commands.Single(candidate =>
+                candidate.TryGetProperty("operation", out var operation) &&
+                operation.GetString() == name);
+            var documented = command.GetProperty("request")
+                .GetProperty("fields")
+                .EnumerateArray()
+                .Select(field => field.GetProperty("name").GetString()!)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.True(
+                expected.SetEquals(documented),
+                $"'scry {name}' documents {string.Join(", ", documented.OrderBy(x => x))} but " +
+                $"ExecutionRequest carries {string.Join(", ", expected.OrderBy(x => x))}.");
+        }
+    }
+
     private static string FindBuiltCli()
     {
         var root = FindRepositoryRoot();

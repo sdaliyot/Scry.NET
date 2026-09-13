@@ -659,7 +659,8 @@ internal static class CliContract
                 F("source", "string", true, "C# source."),
                 F("imports", "string[]", false, "Additional allowed namespaces."),
                 F("references", "string[]", false, "Already-loaded compatible assembly names."),
-                F("timeoutMilliseconds", "integer", false, "Cooperative target timeout.")
+                F("timeoutMilliseconds", "integer", false, "Cooperative target timeout."),
+                F("marshal", "ui", false, "Run the submission on the host UI thread, which is what lets it touch a DependencyObject or a Control. Occupies that thread for the whole submission, so keep it short; timeoutMilliseconds cannot interrupt work already running there.")
             ],
             result,
             example);
