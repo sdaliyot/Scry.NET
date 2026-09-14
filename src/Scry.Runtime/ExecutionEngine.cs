@@ -161,10 +161,15 @@ internal sealed class ExecutionEngine
         }
 
         var stopwatch = Stopwatch.StartNew();
+        long? compileMilliseconds = null;
         try
         {
             if (!compilationCached)
             {
+                // Bracketed separately from the overall stopwatch so a slow compile (reference
+                // resolution, script complexity) can be told apart from a slow run (the
+                // submission's own work) - the two point at very different problems.
+                var compileStopwatch = Stopwatch.StartNew();
                 diagnostics = script.Compile(executionToken).Select(ToDiagnostic).ToArray();
                 var errors = diagnostics
                     .Where(diagnostic => diagnostic.Severity == nameof(DiagnosticSeverity.Error))
@@ -177,21 +182,34 @@ internal sealed class ExecutionEngine
                 }
 
                 _scripts.Add(cacheKey, script, diagnostics);
+                compileStopwatch.Stop();
+                compileMilliseconds = compileStopwatch.ElapsedMilliseconds;
             }
 
             // No ConfigureAwait(false) inside: when this runs through a marshaller the dispatcher's
             // SynchronizationContext is current, and capturing it is the whole point - a submission
             // that awaits must resume on the UI thread too, not just start there. Unmarshalled there
             // is no context to capture, so the behaviour is unchanged.
+            //
+            // The completing thread is captured here, at the tail of this local function, rather
+            // than after the outer `await marshaller(...)` below. A marshaller is free to bridge its
+            // own completion back through machinery - a TaskCompletionSource, a dispatcher operation
+            // - that does not itself resume on the marshalled thread even though the submission's own
+            // code did; measuring the wrong side of that bridge would misreport a request that was
+            // genuinely marshalled as if it had not been.
+            var completionThreadId = 0;
             async Task<object?> RunSubmissionAsync()
             {
                 var state = await script.RunAsync(globals, cancellationToken: executionToken);
-                return await UnwrapAsync(state.ReturnValue);
+                var result = await UnwrapAsync(state.ReturnValue);
+                completionThreadId = Environment.CurrentManagedThreadId;
+                return result;
             }
 
             var marshaller = _configuration.ExecutionMarshaller;
-            var value = marshalToUiThread && marshaller is not null
-                ? await marshaller(RunSubmissionAsync, executionToken).ConfigureAwait(false)
+            var marshalled = marshalToUiThread && marshaller is not null;
+            var value = marshalled
+                ? await marshaller!(RunSubmissionAsync, executionToken).ConfigureAwait(false)
                 : await RunSubmissionAsync().ConfigureAwait(false);
             stopwatch.Stop();
             return new(
@@ -200,7 +218,11 @@ internal sealed class ExecutionEngine
                 logs.DroppedCount,
                 diagnostics,
                 stopwatch.ElapsedMilliseconds,
-                compilationCached);
+                compilationCached,
+                marshalled,
+                completionThreadId,
+                compileMilliseconds,
+                stopwatch.ElapsedMilliseconds - (compileMilliseconds ?? 0));
         }
         catch (OperationCanceledException) when (
             timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -315,7 +337,11 @@ internal sealed record ExecutionOutput(
     int DroppedLogEntries,
     IReadOnlyList<CompilationDiagnostic> Diagnostics,
     long ElapsedMilliseconds,
-    bool CompilationCached);
+    bool CompilationCached,
+    bool Marshalled,
+    int ThreadId,
+    long? CompileMilliseconds,
+    long RunMilliseconds);
 
 internal sealed class ScryCompilationException(IReadOnlyList<CompilationDiagnostic> diagnostics)
     : Exception("C# compilation failed.")

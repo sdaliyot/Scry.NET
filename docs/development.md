@@ -389,11 +389,21 @@ Context.CancellationToken
 Context.Log("message", "information")
 ```
 
-Registered root factories are evaluated once at the start of each execution. `Resolve` enforces the current target/session handle scope. Logs are bounded by entry count and message length and report dropped entries. Compilation failures use the normal failure envelope with code `compilation_failed` and structured diagnostics containing ID, severity, message, and one-based source spans. Exceptions thrown by compiled code use the ordinary recursive exception envelope.
+Registered root factories are evaluated once at the start of each execution. `Resolve` enforces the current target/session handle scope. Logs are bounded by entry count and message length and report dropped entries. Compilation failures use the normal failure envelope with code `compilation_failed` and structured diagnostics containing ID, severity, message, and one-based source spans. Exceptions thrown by compiled code use the ordinary recursive exception envelope: `InnerException` is followed to a depth of `ExceptionDetail.MaximumDepth` (8), past which a node reports `Truncated: true` rather than continuing, and message/stack-trace text is capped independently, so an unusually deep or verbose exception is reported in bounded form rather than risking the JSON depth limit or frame size cap and failing to serialize at all. An `AggregateException` reports every one of its faults (also capped at 8, with the count of any dropped) in `InnerExceptions`, and `InnerException` still holds the first fault for a caller that only looks there.
 
 Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context, the injected agent's host context, or the .NET Framework default AppDomain. Dynamic, native, and unreadable modules are skipped. On .NET 9, unrelated non-default-context modules are skipped because Roslyn cannot safely bind script code to an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
 
-Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code that never observes server cancellation cannot be forcibly stopped safely inside the target process and can continue blocking that connection. Scry does not claim process isolation or hard timeouts.
+Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code - or a marshalled submission that never observes cancellation while holding the host's UI thread - cannot be forcibly stopped inside the target process. Scry does not claim process isolation or hard timeouts.
+
+`ScryClient.RequestTimeout` (default 60s, `scry`'s `--timeout` on the CLI) bounds only the
+*client's* wait for a reply, not the target's execution. Before it existed, a submission like
+this hung the calling client - and every later request on it - forever, because the pipe read
+had no deadline of its own and .NET Framework's `PipeStream` does not honour a cancellation
+token once a read has started. On expiry the client raises `TimeoutException` and retires the
+connection rather than leaving it open: the abandoned request's response can still arrive later,
+and reading it as the reply to a subsequent request would be worse than failing outright. The
+target-side thread the submission occupied is not reclaimed by this - only a fresh attach or
+restart of the target does that.
 
 Host defaults are configurable through `EndpointOptions`: source length, default/maximum execution milliseconds, imports/references, bounded logs, type result/member limits, and assembly file size. The protocol frame limit remains an independent upper bound.
 
@@ -425,6 +435,13 @@ because the assemblies it bound to cannot be unloaded from the default AppDomain
 
 `ExecutionResult.CompilationCached` reports which path a submission took, so a caller can tell a
 fast repeat from a cold compile, and tests can assert the behaviour without relying on timing.
+`CompileMilliseconds` (null on a cache hit) and `RunMilliseconds` split the same distinction out
+as timing, separate from `ElapsedMilliseconds`'s combined total - a slow compile points at
+reference resolution or script complexity, a slow run points at the submission's own work.
+`Marshalled` and `ThreadId` report whether the submission actually ran through the host's
+execution marshaller and which managed thread it completed on; before these existed, a caller
+asking for `"marshal": "ui"` had no positive confirmation it was honoured beyond the request not
+failing.
 
 One cost no cache removes: a marshalled submission has to wait for the target's UI thread. While
 the target is busy - during its own startup, say - each marshalled poll queues behind that work.

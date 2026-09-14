@@ -447,7 +447,11 @@ internal sealed class OperationDispatcher(
             result.DroppedLogEntries,
             result.Diagnostics,
             result.ElapsedMilliseconds,
-            result.CompilationCached);
+            result.CompilationCached,
+            result.Marshalled,
+            result.ThreadId,
+            result.CompileMilliseconds,
+            result.RunMilliseconds);
     }
 
     private async ValueTask<object> ExecuteAsync(

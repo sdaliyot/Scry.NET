@@ -396,6 +396,14 @@ than falling onto the thread pool mid-way. `wait` is the exception by design: it
 evaluation rather than the polling loop, so a long marshalled wait never holds the UI thread between
 attempts.
 
+That cooperative limit is why `ScryClient.RequestTimeout` (default 60s; `--timeout` on the CLI)
+exists: it bounds only how long the *caller* waits for a reply, not the submission itself. A
+script that never observes its cancellation token still occupies the target's thread indefinitely,
+but the client now fails with a clear timeout and retires that connection instead of hanging
+forever alongside it. `ExecutionResult` also reports `marshalled` and `threadId`, so a caller can
+confirm a `"marshal": "ui"` request actually ran on the nominated thread rather than only
+inferring it from success.
+
 ## Samples
 
 Two kinds. The embedded samples host an endpoint themselves and show what registration looks like

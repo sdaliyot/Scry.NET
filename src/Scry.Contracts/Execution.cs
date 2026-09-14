@@ -25,13 +25,39 @@ public sealed record ExecutionRequest(
 /// tell a fast repeat from a cold compile, and makes the script cache observable without relying
 /// on timing.
 /// </param>
+/// <param name="Marshalled">
+/// True when this submission actually ran through the host's execution marshaller - the only way
+/// to confirm a <c>"marshal": "ui"</c> request was honoured. Before this existed, the caller had no
+/// positive signal that marshalling happened; the only feedback was a failure, when a marshaller
+/// was missing or unrecognised. False for a submission that ran without asking to be marshalled.
+/// </param>
+/// <param name="ThreadId">
+/// The managed thread ID the submission completed on. Mainly useful together with
+/// <see cref="Marshalled"/>, to confirm a marshalled submission actually finished on the host's
+/// nominated thread rather than one it was resumed onto elsewhere.
+/// </param>
+/// <param name="CompileMilliseconds">
+/// Time spent compiling, or null when <see cref="CompilationCached"/> is true and no compile
+/// happened. Split out from <see cref="ElapsedMilliseconds"/> because the two have very different
+/// causes: a slow compile points at reference resolution or script complexity, a slow run points at
+/// the submission's own work.
+/// </param>
+/// <param name="RunMilliseconds">
+/// Time spent actually running the script, excluding any compile captured in
+/// <see cref="CompileMilliseconds"/>. Equals <see cref="ElapsedMilliseconds"/> when the submission
+/// was served from the script cache.
+/// </param>
 public sealed record ExecutionResult(
     RemoteValue Value,
     IReadOnlyList<ExecutionLogEntry> Logs,
     int DroppedLogEntries,
     IReadOnlyList<CompilationDiagnostic> Diagnostics,
     long ElapsedMilliseconds,
-    bool CompilationCached = false);
+    bool CompilationCached = false,
+    bool Marshalled = false,
+    int ThreadId = 0,
+    long? CompileMilliseconds = null,
+    long RunMilliseconds = 0);
 
 public sealed record ExecutionLogEntry(
     DateTimeOffset Timestamp,

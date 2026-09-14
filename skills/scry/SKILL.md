@@ -621,9 +621,18 @@ Execution settings request:
 ```
 
 Timeouts are cooperative, not process isolation. Synchronous target code that ignores
-cancellation can continue blocking the connection. Compilation errors return
+cancellation keeps running in the target - especially serious for a `"marshal": "ui"`
+submission, which holds the target's UI thread until it returns. `scry`'s own `--timeout`
+(default 60s) bounds how long the CLI itself waits for a reply, so a wedged submission fails
+the command with `connection_failed` instead of hanging the agent's shell forever - but it
+does not stop the target from still running the code. Compilation errors return
 `compilation_failed` with structured diagnostics. Never retry unchanged source after a
 compilation or validation failure.
+
+Only `Context.Log(...)` calls are captured and returned in `logs`. `Console.WriteLine`,
+`Trace.Write`, and similar target-process output are not intercepted and go wherever the
+target's own console or trace listeners send them - typically nowhere, for a GUI process.
+Use `Context.Log` for anything a script needs to report back.
 
 ## Long-running jobs
 
