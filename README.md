@@ -458,6 +458,10 @@ multi-target scenarios and assembly loading.
 
 ## Security, authorization and limits
 
+See [`docs/threat-model.md`](docs/threat-model.md) for the full reasoning - assets, the trust
+boundary, what the audit log does and does not prove, and what is deliberately not defended
+against. The summary:
+
 Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
 
 Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
@@ -465,6 +469,9 @@ Attach mode is intentionally restricted to processes running at the same or a lo
 Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
 
 ## Build and test
+
+`.\validate.ps1` runs the full matrix below in one command and stops at the first failure; it is
+also what [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs. To run the steps individually:
 
 ```powershell
 dotnet build Scry.sln
@@ -477,4 +484,5 @@ dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f n
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE). Third-party packages Scry.NET depends on are listed in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

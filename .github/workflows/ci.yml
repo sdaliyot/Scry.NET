@@ -1,0 +1,39 @@
+# Runs the same matrix as validate.ps1 (see docs/development.md's "Validation" section for what
+# each step covers). This workflow calls that script rather than duplicating its steps, so the
+# matrix has exactly one definition whether it is run here or on a developer's machine.
+#
+# Untested on GitHub as of this commit: the repository has no remote yet, so this workflow has
+# never actually run. validate.ps1 has - see its own history for the local verification, including
+# a deliberate-failure check that the script stops and reports correctly rather than continuing
+# past a failed step.
+#
+# Feasibility notes for whoever first sees this run:
+# - windows-latest ships Visual Studio 2022 with the MSVC v143 toolset and vswhere.exe, which is
+#   what native/Scry.Injector.Native/build.ps1 requires; build-native.ps1 should need nothing extra.
+# - The net472 legs need the in-box .NET Framework runtime, which windows-latest carries, plus the
+#   Microsoft.NETFramework.ReferenceAssemblies.net472 NuGet package this repo already references
+#   for the targeting pack - no separate Framework SDK install should be required.
+# - The WPF and WinForms adapter suites create real dispatchers and forms. That is the part most
+#   likely to need adjustment on a runner with no interactive desktop session; if it fails here
+#   first, start there.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Run the full validation matrix
+        shell: pwsh
+        run: .\validate.ps1

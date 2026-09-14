@@ -1,5 +1,8 @@
 # Foundation development guide
 
+See [`threat-model.md`](threat-model.md) for the security reasoning behind what follows - assets,
+the trust boundary, and what is deliberately not defended against versus what simply is not built.
+
 ## Architecture
 
 | Project | Responsibility |
@@ -503,6 +506,12 @@ Scenario output is a `ScenarioResult` containing `protocolVersion`, normalized `
 Generated Roslyn script assemblies and assemblies loaded into the .NET Framework default AppDomain cannot be unloaded independently. They remain until the host process exits. Scry does not create, marshal across, or unload child AppDomains in the net472 implementation.
 
 ## Validation
+
+`.\validate.ps1` runs every step below in order and stops at the first failure, naming which step
+failed rather than leaving that to be read out of a wall of build output. It is the same matrix
+`.github/workflows/ci.yml` runs, kept in one place so neither can drift from the other. Pass
+`-Quick` to skip the native rebuild and the x86 leg for a faster inner-loop check; a real
+validation pass should use neither.
 
 Run the modern and desktop CLR suites explicitly:
 
