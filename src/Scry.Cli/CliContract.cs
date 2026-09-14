@@ -15,6 +15,30 @@ internal static class CliContract
         "winforms.screenshot"
     ];
 
+    /// <summary>
+    /// Options every target-addressed command accepts, as opposed to the per-operation request
+    /// fields. Kept here rather than only in the help text so <c>scry schema</c> describes them,
+    /// since that is what agents are pointed at as the authority.
+    /// </summary>
+    private static readonly IReadOnlyList<CliField> CommonOptions =
+    [
+        F("--target", "string", false, "Target ID or alias; mutually exclusive with --descriptor."),
+        F("--descriptor", "string", false, "Path to a target descriptor; mutually exclusive with --target."),
+        F("--session", "string", false, "Resume a persistent session instead of using an ephemeral one."),
+        F("--correlation", "string", false, "Correlation ID echoed back on the response."),
+        F("--request", "file|-", false, "JSON request object from a file, or - for stdin."),
+        F("--input", "file|-", false, "Compatible spelling of --request."),
+        F("--source", "file|-", false, "C# source from a file, or - for stdin. Execution commands only."),
+        F(
+            "--timeout",
+            "integer",
+            false,
+            "Seconds to wait for a response before failing with connection_failed; 0 waits " +
+            "indefinitely. Defaults to 60. A marshalled submission that never observes its " +
+            "cancellation token cannot be ended by timeoutMilliseconds, so this is the only " +
+            "bound on such a request.")
+    ];
+
     private static readonly IReadOnlyList<CliExitCode> ExitCodes =
     [
         new(0, "success", "The command completed successfully."),
@@ -462,6 +486,8 @@ internal static class CliContract
                   --correlation <id>      Echo an agent-supplied correlation ID.
                   --request <file|->      Read a JSON request object from a file or stdin.
                   --input <file|->        Compatible spelling of --request.
+                  --timeout <seconds>     Give up if the target does not respond; 0 waits
+                                          indefinitely. Defaults to 60 seconds.
 
                 C# source is accepted through --source <file|-> or redirected stdin. Use --request
                 for execution settings plus source. --json is retained for non-sensitive,
@@ -565,6 +591,10 @@ internal static class CliContract
                 }
             },
             exitCodes = ExitCodes,
+            // Options accepted by every target-addressed command. Previously these appeared only
+            // in the human help text, which left an agent told to trust `scry schema` unable to
+            // discover them at all.
+            commonOptions = CommonOptions,
             commands = Commands.Select(command => new
             {
                 command = command.Path,

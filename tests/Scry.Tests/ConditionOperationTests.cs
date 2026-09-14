@@ -78,6 +78,22 @@ public sealed class ConditionOperationTests
     public async Task Wait_polls_until_a_condition_becomes_true()
     {
         await using var context = await ConditionHost.StartAsync();
+        const string condition = "Context.Roots[\"state\"].ToString()";
+
+        // Compile the condition before timing anything. The first submission of a given source
+        // pays a cold Roslyn compile, which can exceed the flip delay below - so without this
+        // the state is already "arrived" by the time attempt 1 evaluates, the wait is satisfied
+        // immediately, and the attempts assertion fails. The test then passes or fails according
+        // to whether an earlier test happened to warm the cache, which is why it passed in a
+        // full run and failed when run alone.
+        await context.Client.RequestAsync(
+            "wait",
+            new ConditionRequest(
+                condition,
+                ConditionOperators.EqualTo,
+                Expected: JsonDocument.Parse("\"arrived\"").RootElement,
+                TimeoutMilliseconds: 1,
+                PollIntervalMilliseconds: 1));
 
         // Flips to true shortly after the wait starts, so this can only pass by actually polling.
         _ = Task.Run(async () =>
@@ -89,7 +105,7 @@ public sealed class ConditionOperationTests
         var result = await context.Client.RequestAsync(
             "wait",
             new ConditionRequest(
-                "Context.Roots[\"state\"].ToString()",
+                condition,
                 ConditionOperators.EqualTo,
                 Expected: JsonDocument.Parse("\"arrived\"").RootElement,
                 TimeoutMilliseconds: 10_000,

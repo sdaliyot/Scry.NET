@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Scry.Contracts;
 using Scry.Injector;
@@ -83,7 +84,11 @@ internal static class Cli
                 "request",
                 "source",
                 "json",
-                "correlation");
+                "correlation",
+                "timeout");
+            // Parsed before any I/O, so a malformed option is reported as a usage error rather
+            // than being masked by a target that happens not to be running.
+            var requestTimeout = ParseTimeout(options);
             var payload = await ReadPayloadAsync(options, command).ConfigureAwait(false);
             var descriptor = await ResolveDescriptorAsync(options).ConfigureAwait(false);
             options.TryGetValue("session", out var sessionId);
@@ -91,15 +96,24 @@ internal static class Cli
             options.TryGetValue("correlation", out var correlationId);
             var persistentJobSession = command == "job.start";
             var request = CliContract.PrepareRequest(command, payload);
+            using var interrupt = new CancellationTokenSource();
+            using var interruptHandler = InstallInterruptHandler(interrupt);
             await using var client = await ScryClient.ConnectAsync(
                 descriptor,
                 sessionId,
                 clientName: "scry",
-                ephemeralSession: sessionId is null && !persistentJobSession).ConfigureAwait(false);
+                ephemeralSession: sessionId is null && !persistentJobSession,
+                cancellationToken: interrupt.Token).ConfigureAwait(false);
+            if (requestTimeout is { } configured)
+            {
+                client.RequestTimeout = configured;
+            }
+
             var response = await client.RequestCorrelatedAsync(
                 request.Operation,
                 request.Payload,
-                correlationId).ConfigureAwait(false);
+                correlationId,
+                interrupt.Token).ConfigureAwait(false);
             response = CliContract.NormalizeResponse(command, response);
             WriteJson(response);
             return response.Success ? Success : OperationError;
@@ -466,6 +480,57 @@ internal static class Cli
         {
             throw new CliUsageException($"Could not read {kind} input '{path}': {exception.Message}");
         }
+    }
+
+    /// <summary>
+    /// Reads <c>--timeout</c> as whole seconds, or <c>0</c> to wait indefinitely. Null leaves the
+    /// client default in place.
+    /// </summary>
+    private static TimeSpan? ParseTimeout(Dictionary<string, string> options)
+    {
+        if (!options.TryGetValue("timeout", out var raw))
+        {
+            return null;
+        }
+
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds) ||
+            seconds < 0)
+        {
+            throw new CliUsageException(
+                $"--timeout expects a whole number of seconds, or 0 to wait indefinitely; found '{raw}'.");
+        }
+
+        return seconds == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(seconds);
+    }
+
+    /// <summary>
+    /// Turns Ctrl+C into cancellation of the in-flight request rather than an abrupt process
+    /// kill, so the command still emits a structured envelope and a documented exit code. The
+    /// handler is removed on the way out, because the CLI is also hosted in-process by tests.
+    /// </summary>
+    private static IDisposable InstallInterruptHandler(CancellationTokenSource interrupt)
+    {
+        ConsoleCancelEventHandler handler = (_, eventArgs) =>
+        {
+            // Cancel the request and keep the process alive long enough to report it; a second
+            // Ctrl+C is left to the runtime, so an unresponsive command can still be killed.
+            eventArgs.Cancel = !interrupt.IsCancellationRequested;
+            try
+            {
+                interrupt.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        };
+
+        Console.CancelKeyPress += handler;
+        return new InterruptHandlerRegistration(handler);
+    }
+
+    private sealed class InterruptHandlerRegistration(ConsoleCancelEventHandler handler) : IDisposable
+    {
+        public void Dispose() => Console.CancelKeyPress -= handler;
     }
 
     private static Dictionary<string, string> ParseOptions(string[] args)

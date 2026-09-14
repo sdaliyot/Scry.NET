@@ -128,6 +128,15 @@ public sealed class ScriptCacheTests
     {
         await using var context = await CacheHost.StartAsync();
 
+        // Compile the condition before the timed wait, and assert it really was a cold compile.
+        // Otherwise the wait's own first attempt pays for the compile, which on a slower
+        // configuration - the x86 leg especially - can consume the whole 400 ms budget and leave
+        // exactly one attempt. The assertion below would then fail for a reason that has nothing
+        // to do with caching, and only on some of the matrix.
+        Assert.False(
+            CompilationCached(await context.EvaluateAsync(new ExecutionRequest("false"))),
+            "The condition should not have been compiled yet.");
+
         var result = await context.Client.RequestAsync(
             "wait",
             new ConditionRequest(
