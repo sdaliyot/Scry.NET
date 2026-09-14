@@ -53,6 +53,24 @@ public sealed class RuntimeHostOptions
 
     public int MaximumJobLogMessageLength { get; init; } = 4096;
 
+    /// <summary>
+    /// Whether to write the rolling audit file under <c>%LOCALAPPDATA%\Scry\audit</c>. On by
+    /// default, deliberately: attach mode cannot be configured by the target application (it does
+    /// not cooperate), so a zero-configuration default is the only way an injected endpoint is
+    /// auditable at all.
+    /// </summary>
+    public bool AuditEnabled { get; init; } = true;
+
+    /// <summary>Overrides where the audit file is written. Null uses the default directory.</summary>
+    public string? AuditDirectory { get; init; }
+
+    /// <summary>
+    /// Receives every audit record in addition to (or instead of, with <see cref="AuditEnabled"/>
+    /// false) the file. Called on a background thread; a throwing or slow handler affects nothing
+    /// but its own records.
+    /// </summary>
+    public AuditRecordHandler? AuditCallback { get; init; }
+
     private static string DefaultAlias()
     {
 #if NETFRAMEWORK

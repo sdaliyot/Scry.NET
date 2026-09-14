@@ -20,6 +20,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
     private readonly SessionManager _sessions;
     private readonly OperationDispatcher _dispatcher;
     private readonly JobManager _jobs;
+    private readonly AuditLog _audit;
     private readonly Task _acceptTask;
     private readonly EventHandler _processExitHandler;
     private int _connectionId;
@@ -113,7 +114,24 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             options.MaximumJobs,
             options.MaximumJobLogEntries,
             options.MaximumJobLogMessageLength);
+        _audit = new(
+            options.AuditEnabled,
+            options.AuditDirectory,
+            options.AuditCallback,
+            process.Id);
         PublishDescriptor();
+        // After the publish, not before: a publish failure must not be reported as a successful
+        // start.
+        _audit.Write(new(
+            AuditEventKinds.EndpointStarted,
+            DateTimeOffset.UtcNow,
+            targetId,
+            AuditOutcomes.Started)
+        {
+            Alias = options.Alias,
+            ProcessId = process.Id,
+            HostUser = AuditLog.CurrentHostUser()
+        });
         _processExitHandler = (_, _) => CleanupDescriptor();
         AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
         _acceptTask = AcceptConnectionsAsync(_stopping.Token);
@@ -175,6 +193,15 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         _sessions.Dispose();
         CleanupDescriptor();
         _stopping.Dispose();
+
+        // Enqueued after the descriptor is gone and connections are refused, so it is genuinely
+        // the last record - but before the log itself stops draining.
+        _audit.Write(new(
+            AuditEventKinds.EndpointStopped,
+            DateTimeOffset.UtcNow,
+            Metadata.TargetId,
+            AuditOutcomes.Succeeded));
+        await _audit.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task AcceptConnectionsAsync(CancellationToken cancellationToken)
@@ -234,6 +261,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
             if (handshakeFrame.Operation != "handshake")
             {
+                _audit.Write(DeniedHandshake(connectionId, "handshake_required"));
                 await WriteFailureAsync(
                     pipe,
                     handshakeFrame.RequestId,
@@ -263,6 +291,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             catch (Exception exception) when (
                 exception is JsonException or InvalidOperationException or ProtocolException)
             {
+                _audit.Write(DeniedHandshake(connectionId, "invalid_handshake"));
                 await WriteFailureAsync(
                     pipe,
                     handshakeFrame.RequestId,
@@ -276,6 +305,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
             if (!TokenMatches(handshake.CapabilityToken))
             {
+                // Never the supplied token, even in the audit log - a wrong token here could be a
+                // valid token for a different live target, and there can be several.
+                _audit.Write(DeniedHandshake(connectionId, "authentication_failed", handshake.ClientName));
                 await WriteFailureAsync(
                     pipe,
                     handshakeFrame.RequestId,
@@ -290,6 +322,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             if (handshake.MinimumVersion > ProtocolConstants.Version ||
                 handshake.MaximumVersion < ProtocolConstants.Version)
             {
+                _audit.Write(DeniedHandshake(connectionId, "protocol_version_mismatch", handshake.ClientName));
                 await WriteFailureAsync(
                     pipe,
                     handshakeFrame.RequestId,
@@ -301,9 +334,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 return;
             }
 
+            var clientName = AuditLog.Bound(handshake.ClientName);
             var session = handshake.SessionId is null
-                ? _sessions.Create()
-                : _sessions.Resume(handshake.SessionId);
+                ? _sessions.Create(clientName)
+                : _sessions.Resume(handshake.SessionId, clientName);
             sessionId = session.Id;
             ephemeralSession = handshake.EphemeralSession && handshake.SessionId is null;
             var result = new HandshakeResult(
@@ -316,6 +350,17 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 pipe,
                 ProtocolResponse.Succeeded(handshakeFrame.RequestId, session.Id, result),
                 cancellationToken).ConfigureAwait(false);
+            _audit.Write(new(
+                AuditEventKinds.Handshake,
+                DateTimeOffset.UtcNow,
+                Metadata.TargetId,
+                AuditOutcomes.Succeeded)
+            {
+                ConnectionId = connectionId,
+                SessionId = session.Id,
+                ClientName = clientName,
+                Detail = handshake.SessionId is null ? "created" : "resumed"
+            });
 
             while (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
             {
@@ -331,6 +376,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId)
                     ? operationId
                     : request.CorrelationId ?? operationId;
+                var operationStopwatch = Stopwatch.StartNew();
                 try
                 {
                     if (request.ProtocolVersion != ProtocolConstants.Version)
@@ -386,11 +432,48 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                         correlationId);
                 }
 
+                _audit.Write(new(
+                    AuditEventKinds.Operation,
+                    DateTimeOffset.UtcNow,
+                    Metadata.TargetId,
+                    response.Success ? AuditOutcomes.Succeeded : AuditOutcomes.Failed)
+                {
+                    ConnectionId = connectionId,
+                    SessionId = session.Id,
+                    ClientName = session.ClientName,
+                    Operation = AuditLog.Bound(request.Operation),
+                    OperationId = operationId,
+                    CorrelationId = AuditLog.Bound(correlationId),
+                    ElapsedMilliseconds = operationStopwatch.ElapsedMilliseconds,
+                    ErrorCode = response.Error?.Code,
+                    Detail = AuditLog.DescribePayload(request.Operation, request.Payload)
+                });
+
                 await FrameCodec.WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception exception)
         {
+            // Cancellation here means normal shutdown (the host is disposing), not a fault -
+            // recording every connection torn down at shutdown would swamp the log with noise
+            // that has nothing to do with what any caller did.
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _audit.Write(new(
+                    AuditEventKinds.ConnectionFaulted,
+                    DateTimeOffset.UtcNow,
+                    Metadata.TargetId,
+                    AuditOutcomes.Failed)
+                {
+                    ConnectionId = connectionId,
+                    SessionId = sessionId,
+                    ErrorCode = exception is ScryOperationException operationException
+                        ? operationException.Code
+                        : "protocol_error",
+                    Detail = AuditLog.Bound(exception.Message)
+                });
+            }
+
             if (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
             {
                 try
@@ -399,8 +482,8 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                         pipe,
                         "unknown",
                         sessionId,
-                        exception is ScryOperationException operationException
-                            ? operationException.Code
+                        exception is ScryOperationException operationException2
+                            ? operationException2.Code
                             : "protocol_error",
                         exception.Message,
                         exception,
@@ -439,6 +522,18 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             new(code, message, exception is null ? null : ExceptionDetail.FromException(exception)));
         await FrameCodec.WriteAsync(stream, response, cancellationToken).ConfigureAwait(false);
     }
+
+    private AuditRecord DeniedHandshake(int connectionId, string errorCode, string? clientName = null) =>
+        new(
+            AuditEventKinds.Handshake,
+            DateTimeOffset.UtcNow,
+            Metadata.TargetId,
+            AuditOutcomes.Denied)
+        {
+            ConnectionId = connectionId,
+            ErrorCode = errorCode,
+            ClientName = AuditLog.Bound(clientName)
+        };
 
     private bool TokenMatches(string candidate)
     {

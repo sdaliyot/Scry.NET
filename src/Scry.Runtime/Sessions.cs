@@ -37,7 +37,7 @@ internal sealed class SessionManager : IDisposable
             TimeSpan.FromSeconds(30));
     }
 
-    public SessionState Create()
+    public SessionState Create(string? clientName = null)
     {
         lock (_admissionGate)
         {
@@ -58,7 +58,10 @@ internal sealed class SessionManager : IDisposable
                     _handleLease,
                     _sessionLease,
                     _maximumPreviewLength,
-                    _maximumHandlesPerSession);
+                    _maximumHandlesPerSession)
+                {
+                    ClientName = clientName
+                };
                 if (_sessions.TryAdd(id, session))
                 {
                     return session;
@@ -69,11 +72,19 @@ internal sealed class SessionManager : IDisposable
         }
     }
 
-    public SessionState Resume(string id)
+    public SessionState Resume(string id, string? clientName = null)
     {
         if (!_sessions.TryGetValue(id, out var session) || !session.TryTouch())
         {
             throw new ScryOperationException("session_not_found", "The requested session does not exist or has expired.");
+        }
+
+        // A resumed session keeps whichever name it already had unless the resuming client gave
+        // one; this is what lets a background job (which has no connection of its own) still
+        // report the name of whoever originally started the session it runs under.
+        if (clientName is not null)
+        {
+            session.ClientName = clientName;
         }
 
         return session;
@@ -156,6 +167,14 @@ internal sealed class SessionState : IDisposable
     }
 
     public string Id { get; }
+
+    /// <summary>
+    /// Self-asserted by the connecting client at handshake (<c>HandshakeRequest.ClientName</c>).
+    /// A label for the audit log, not an authenticated identity - carried on the session, rather
+    /// than only on the connection, so every operation record on this session names the same
+    /// caller even across a resumed (non-ephemeral) session.
+    /// </summary>
+    public string? ClientName { get; set; }
 
     public DateTimeOffset ExpiresAt { get; private set; }
 
