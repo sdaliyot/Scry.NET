@@ -174,10 +174,11 @@ that is `Scry.Injector.Payload`, `Scry.Endpoint`, `Scry.Runtime` and `Scry.Contr
 desktop adapter if you asked for one. Everything else stays in the tool process.
 
 ```mermaid
+%%{init: {"flowchart": {"subGraphTitleMargin": {"top": 6, "bottom": 12}}} }%%
 flowchart TB
   subgraph tool["Tool process - your test runner, or an agent's shell"]
     direction LR
-    cli["scry<br/>the JSON command line"]
+    cli["scry - the JSON command line<br/>or your own test code"]
     cl["Scry.Client"]
     inj["Scry.Injector"]
   end
@@ -186,8 +187,8 @@ flowchart TB
     native["Scry.Injector.Native<br/>native bootstrap DLL, x86 / x64"]
     pay["Scry.Injector.Payload"]
     ad["Scry.Wpf / Scry.WinForms<br/>optional adapters"]
-    ep["Scry.Endpoint - what your code calls"]
-    rt["Scry.Runtime - serves the pipe"]
+    ep["Scry.Endpoint - the hosting surface"]
+    rt["Scry.Runtime - the engine and what serves the pipe"]
   end
 
   shared["Scry.Contracts - the wire contract, loaded on both sides"]
@@ -196,13 +197,16 @@ flowchart TB
   cli --> inj
   inj -. "CreateRemoteThread" .-> native
   native -. "starts the CLR, loads by name" .-> pay
-  pay -. "reflection: UseWpf" .-> ad
+  pay -. "reflection: UseWpf/UseWinForms" .-> ad
   pay --> ep
   ad --> ep
   ep --> rt
   cl -. "requests over a named pipe" .-> rt
   cl --> shared
   rt --> shared
+
+  classDef attachOnly stroke-dasharray:6 4,stroke-width:2px,stroke:#b5651d
+  class inj,native,pay attachOnly
 ```
 
 Solid arrows are compile-time references. Dashed arrows are resolved at runtime by name - the
@@ -214,13 +218,15 @@ never initiates a message, and the frame envelope has no way to express one. Eve
 long poll - the client asks, the target replies late, and the reply carries a `timedOut` flag so the
 client knows to ask again. Nothing is pushed.
 
-`Scry.Endpoint` and `Scry.Runtime` are stacked rather than side by side because they are layers, not
-peers. `Scry.Endpoint` is the surface your application calls - `EndpointHost.Start`, the registration
-builder - and holds no transport code at all; `Scry.Runtime` underneath it owns the named pipe, the
-descriptor and the execution engine. That is why the client's arrow lands on `Scry.Runtime`.
+The three boxes with a dashed orange border exist only for attach mode. Embedded mode is this
+picture without them: your application references `Scry.Endpoint` directly and calls
+`EndpointHost.Start` itself, so nothing needs injecting and the injector, the native bootstrap and
+the payload never enter the story. Everything undashed is common to both modes.
 
-In embedded mode the picture is the same minus `Scry.Injector.Payload` and the native bootstrap:
-your application references `Scry.Endpoint` directly and calls `EndpointHost.Start` itself.
+The driving box says "or your own test code" because a test does not shell out to the CLI - it
+references the same two assemblies the CLI is built from: `Scry.Injector` for
+`AttachService.AttachAsync`, and `Scry.Client` to connect once attached. That is why
+`Scry.Injector` has a .NET Framework leg built as a library rather than an executable.
 
 | Component | Runs in | Responsibility |
 |---|---|---|
