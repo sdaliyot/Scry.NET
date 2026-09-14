@@ -112,14 +112,51 @@ public sealed record ProtocolError(
     IReadOnlyDictionary<string, string>? Data = null,
     IReadOnlyList<CompilationDiagnostic>? Diagnostics = null);
 
+/// <param name="InnerExceptions">
+/// Populated only when the projected exception is an <see cref="AggregateException"/>, in which
+/// case it carries every fault (bounded by <see cref="ExceptionDetail.MaximumDepth"/>) and
+/// <see cref="InnerException"/> is set to the first fault as well, so a reader that only looks
+/// at <c>InnerException</c> still sees a fault rather than nothing.
+/// </param>
+/// <param name="DroppedInnerExceptions">
+/// How many of an <see cref="AggregateException"/>'s faults were not projected because
+/// <see cref="InnerExceptions"/> is already at <see cref="ExceptionDetail.MaximumDepth"/>. Null
+/// when nothing was dropped.
+/// </param>
+/// <param name="Truncated">
+/// True when this node's own inner-exception chain kept going past
+/// <see cref="ExceptionDetail.MaximumDepth"/> and was cut off rather than followed further.
+/// </param>
 public sealed record ExceptionDetail(
     string Type,
     string Message,
     string? StackTrace,
     int HResult,
     string? Source,
-    ExceptionDetail? InnerException)
+    ExceptionDetail? InnerException,
+    IReadOnlyList<ExceptionDetail>? InnerExceptions = null,
+    int? DroppedInnerExceptions = null,
+    bool Truncated = false)
 {
+    /// <summary>
+    /// How many inner-exception levels are followed - through <see cref="Exception.InnerException"/>,
+    /// or through each fault of an <see cref="AggregateException"/> - before the chain is cut off.
+    /// There is no natural bound on how deeply an application can wrap exceptions, and following it
+    /// unbounded risks overrunning the JSON depth limit or the frame's byte cap, which would fail to
+    /// serialize the error being reported rather than merely truncate it. The same constant bounds
+    /// how many of an <see cref="AggregateException"/>'s faults are projected at all.
+    /// </summary>
+    public const int MaximumDepth = 8;
+
+    /// <summary>Matches the truncation length used elsewhere for a projected string value.</summary>
+    public const int MaximumMessageLength = 4096;
+
+    /// <summary>
+    /// Generous relative to <see cref="MaximumMessageLength"/>: a stack trace is where most of an
+    /// exception's forensic value lives, so it is capped far looser.
+    /// </summary>
+    public const int MaximumStackTraceLength = 16384;
+
     public static ExceptionDetail FromException(Exception exception)
     {
         if (exception is null)
@@ -127,14 +164,64 @@ public sealed record ExceptionDetail(
             throw new ArgumentNullException(nameof(exception));
         }
 
+        return FromException(exception, MaximumDepth);
+    }
+
+    private static ExceptionDetail FromException(Exception exception, int remainingDepth)
+    {
+        if (remainingDepth <= 0)
+        {
+            return new(
+                exception.GetType().FullName ?? exception.GetType().Name,
+                Truncate(exception.Message, MaximumMessageLength)!,
+                null,
+                exception.HResult,
+                exception.Source,
+                InnerException: null,
+                Truncated: true);
+        }
+
+        ExceptionDetail? innerException = null;
+        IReadOnlyList<ExceptionDetail>? innerExceptions = null;
+        int? dropped = null;
+
+        if (exception is AggregateException aggregate && aggregate.InnerExceptions.Count > 0)
+        {
+            var faults = aggregate.InnerExceptions;
+            var projectedCount = Math.Min(faults.Count, MaximumDepth);
+            var projected = new ExceptionDetail[projectedCount];
+            for (var index = 0; index < projectedCount; index++)
+            {
+                projected[index] = FromException(faults[index], remainingDepth - 1);
+            }
+
+            innerExceptions = projected;
+            innerException = projected[0];
+            if (faults.Count > projectedCount)
+            {
+                dropped = faults.Count - projectedCount;
+            }
+        }
+        else if (exception.InnerException is not null)
+        {
+            innerException = FromException(exception.InnerException, remainingDepth - 1);
+        }
+
         return new(
             exception.GetType().FullName ?? exception.GetType().Name,
-            exception.Message,
-            exception.StackTrace,
+            Truncate(exception.Message, MaximumMessageLength)!,
+            Truncate(exception.StackTrace, MaximumStackTraceLength),
             exception.HResult,
             exception.Source,
-            exception.InnerException is null ? null : FromException(exception.InnerException));
+            innerException,
+            innerExceptions,
+            dropped);
     }
+
+    private static string? Truncate(string? value, int maximumLength) =>
+        value is null || value.Length <= maximumLength
+            ? value
+            : value.Substring(0, maximumLength);
 }
 
 public sealed record HandshakeRequest(
