@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net.Sockets;
 using System.Text.Json;
 using Scry.Contracts;
 using Scry.Injector;
@@ -79,6 +80,7 @@ internal static class Cli
                 options,
                 "descriptor",
                 "target",
+                "address",
                 "session",
                 "input",
                 "request",
@@ -89,6 +91,7 @@ internal static class Cli
             // Parsed before any I/O, so a malformed option is reported as a usage error rather
             // than being masked by a target that happens not to be running.
             var requestTimeout = ParseTimeout(options);
+            var address = ParseAddress(options);
             var payload = await ReadPayloadAsync(options, command).ConfigureAwait(false);
             var descriptor = await ResolveDescriptorAsync(options).ConfigureAwait(false);
             options.TryGetValue("session", out var sessionId);
@@ -98,12 +101,20 @@ internal static class Cli
             var request = CliContract.PrepareRequest(command, payload);
             using var interrupt = new CancellationTokenSource();
             using var interruptHandler = InstallInterruptHandler(interrupt);
-            await using var client = await ScryClient.ConnectAsync(
-                descriptor,
-                sessionId,
-                clientName: "scry",
-                ephemeralSession: sessionId is null && !persistentJobSession,
-                cancellationToken: interrupt.Token).ConfigureAwait(false);
+            await using var client = options.ContainsKey("address")
+                ? await ScryClient.ConnectOverTcpAsync(
+                    descriptor,
+                    address,
+                    sessionId,
+                    clientName: "scry",
+                    ephemeralSession: sessionId is null && !persistentJobSession,
+                    cancellationToken: interrupt.Token).ConfigureAwait(false)
+                : await ScryClient.ConnectAsync(
+                    descriptor,
+                    sessionId,
+                    clientName: "scry",
+                    ephemeralSession: sessionId is null && !persistentJobSession,
+                    cancellationToken: interrupt.Token).ConfigureAwait(false);
             if (requestTimeout is { } configured)
             {
                 client.RequestTimeout = configured;
@@ -145,8 +156,13 @@ internal static class Cli
             return ConnectionError;
         }
         catch (Exception exception) when (
-            exception is IOException or TimeoutException or OperationCanceledException or ProtocolException)
+            exception is IOException or TimeoutException or OperationCanceledException or
+            ProtocolException or SocketException)
         {
+            // SocketException does not derive from IOException - it derives from Win32Exception -
+            // so without listing it explicitly here, a refused forwarded port (the single most
+            // likely failure of the TCP transport) would fall through to the generic catch below
+            // and report internal_error/exit 70 instead of connection_failed/exit 4.
             WriteError("connection_failed", exception.Message);
             return ConnectionError;
         }
@@ -197,7 +213,7 @@ internal static class Cli
         }
 
         var result = await AttachService
-            .AttachAsync(parsed.Target, parsed.Alias, parsed.Adapters)
+            .AttachAsync(parsed.Target, parsed.Alias, parsed.Adapters, parsed.TcpPort)
             .ConfigureAwait(false);
         if (!result.Success)
         {
@@ -214,6 +230,9 @@ internal static class Cli
             success = true,
             target = result.Target,
             descriptorPath = result.DescriptorPath,
+            // The bound TCP port, so an operator learns it without opening the token-bearing
+            // descriptor file - never the capability token itself.
+            tcpPort = result.Descriptor!.TcpPort,
             handshake = client.Handshake
         });
         return Success;
@@ -229,7 +248,9 @@ internal static class Cli
                 item.Descriptor.ProtocolVersion,
                 item.Descriptor.Target,
                 item.Path,
-                item.Descriptor.PublishedAt))
+                item.Descriptor.PublishedAt,
+                item.Descriptor.TcpAddress,
+                item.Descriptor.TcpPort))
         };
         WriteJson(result);
         return Success;
@@ -308,11 +329,22 @@ internal static class Cli
                 ? await TargetDiscovery.ReadAsync(path).ConfigureAwait(false)
                 : (await TargetDiscovery.ResolveAsync(command.Target!).ConfigureAwait(false)).Descriptor;
             var sessionId = command.SessionId ?? TryGetJobSession(command.Payload);
-            await using var client = await ScryClient.ConnectAsync(
-                descriptor,
-                sessionId,
-                clientName: "scry-scenario",
-                ephemeralSession: sessionId is null && command.Operation != "job.start").ConfigureAwait(false);
+            // The flagship use case: a command that names Address connects over TCP - typically
+            // to a target on another machine, reached through a port forward - instead of the
+            // pipe, so one scenario can drive a local target and assert on a remote one.
+            var address = command.Address is { } raw ? ScryEndpointAddress.Parse(raw) : null;
+            await using var client = command.Address is not null
+                ? await ScryClient.ConnectOverTcpAsync(
+                    descriptor,
+                    address,
+                    sessionId,
+                    clientName: "scry-scenario",
+                    ephemeralSession: sessionId is null && command.Operation != "job.start").ConfigureAwait(false)
+                : await ScryClient.ConnectAsync(
+                    descriptor,
+                    sessionId,
+                    clientName: "scry-scenario",
+                    ephemeralSession: sessionId is null && command.Operation != "job.start").ConfigureAwait(false);
             var request = CliContract.PrepareRequest(command.Operation, command.Payload);
             var response = await client.RequestCorrelatedAsync(
                 request.Operation,
@@ -352,7 +384,8 @@ internal static class Cli
                 exception);
         }
         catch (Exception exception) when (
-            exception is IOException or TimeoutException or OperationCanceledException or ProtocolException)
+            exception is IOException or TimeoutException or OperationCanceledException or
+            ProtocolException or SocketException)
         {
             return FailedScenarioCommand(
                 command,
@@ -504,6 +537,30 @@ internal static class Cli
     }
 
     /// <summary>
+    /// Reads <c>--address</c> as a <see cref="ScryEndpointAddress"/>, or null when the option is
+    /// absent or is exactly <c>"auto"</c> (meaning "use the descriptor's own"). Parsed before any
+    /// I/O, alongside <see cref="ParseTimeout"/>, so a malformed address is a usage error rather
+    /// than a confusing connection failure.
+    /// </summary>
+    private static ScryEndpointAddress? ParseAddress(Dictionary<string, string> options)
+    {
+        if (!options.TryGetValue("address", out var raw))
+        {
+            return null;
+        }
+
+        try
+        {
+            return ScryEndpointAddress.Parse(raw);
+        }
+        catch (Exception exception) when (
+            exception is FormatException or ArgumentException)
+        {
+            throw new CliUsageException($"--address '{raw}' is invalid: {exception.Message}");
+        }
+    }
+
+    /// <summary>
     /// Turns Ctrl+C into cancellation of the in-flight request rather than an abrupt process
     /// kill, so the command still emits a structured envelope and a documented exit code. The
     /// handler is removed on the way out, because the CLI is also hosted in-process by tests.
@@ -554,6 +611,13 @@ internal static class Cli
         if (options.ContainsKey("descriptor") && options.ContainsKey("target"))
         {
             throw new CliUsageException("Use either --descriptor or --target, not both.");
+        }
+
+        if (options.ContainsKey("address") && options.ContainsKey("target"))
+        {
+            throw new CliUsageException(
+                "--address requires --descriptor; --target resolves through local discovery, " +
+                "which can never surface a remote target.");
         }
 
         var payloadOptions = new[] { "input", "request", "source", "json" }

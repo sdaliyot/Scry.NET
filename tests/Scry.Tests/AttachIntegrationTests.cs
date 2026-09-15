@@ -97,6 +97,81 @@ public sealed class AttachIntegrationTests
     }
 
     /// <summary>
+    /// End-to-end proof that <c>tcpPort=</c> makes it through the whole attach config-blob chain
+    /// (<c>AttachCommandLine</c> -&gt; <c>AttachArguments</c> -&gt; <c>AttachService.AttachAsync</c>
+    /// -&gt; <c>NativeBootstrap.BuildConfiguration</c> -&gt; <c>InjectedEndpointEntryPoint.ParseConfiguration</c>)
+    /// and that the resulting listener is real: the attached process is driven with a genuine TCP
+    /// handshake and an evaluate, not merely asserted to exist.
+    /// </summary>
+    [Fact]
+    public async Task Attached_endpoint_with_tcp_port_is_reachable_over_a_real_tcp_handshake()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            ProcessInspector.CurrentArchitecture != TargetArchitecture.X64)
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var targetAssembly = Path.Combine(
+            root, "samples", "Scry.AttachTarget", "bin", "Release", "net9.0", "Scry.AttachTarget.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        Assert.True(File.Exists(targetAssembly), $"Attach target is missing: {targetAssembly}");
+        Assert.True(
+            File.Exists(Path.Combine(
+                Path.GetDirectoryName(cliAssembly)!, "native", "win-x64", "Scry.Injector.Native.dll")),
+            "Build the native x64 helper before running the attach integration test.");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"\"{targetAssembly}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start the attach target.");
+
+        try
+        {
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var reportedProcessId = await process.StandardOutput.ReadLineAsync(startupTimeout.Token);
+            Assert.Equal(process.Id.ToString(), reportedProcessId);
+
+            var alias = $"injected-tcp-test-{Guid.NewGuid():N}";
+            var attached = await RunCliAsync(
+                cliAssembly,
+                $"attach {process.Id} --alias {alias} --tcp-port 0",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            Assert.True(
+                attached.ExitCode == 0,
+                $"Attach failed ({attached.ExitCode}): {attached.StandardOutput}{attached.StandardError}");
+            using var attachJson = JsonDocument.Parse(attached.StandardOutput);
+            Assert.True(attachJson.RootElement.GetProperty("success").GetBoolean());
+            var tcpPort = attachJson.RootElement.GetProperty("tcpPort").GetInt32();
+            Assert.True(tcpPort is > 0 and <= 65535);
+
+            var descriptorPath = (await Scry.Contracts.TargetDiscovery.ResolveAsync(alias)).Path;
+            var descriptor = await Scry.Contracts.TargetDiscovery.ReadAsync(descriptorPath);
+            Assert.Equal(tcpPort, descriptor.TcpPort);
+
+            await using var client = await Scry.Client.ScryClient.ConnectOverTcpAsync(descriptor);
+            Assert.Equal("tcp", client.Transport);
+            var evaluated = await client.EvaluateAsync(new Scry.Contracts.ExecutionRequest("6 * 7"));
+            Assert.Equal(42, evaluated.Value.Value!.Value.GetInt32());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    /// <summary>
     /// The acceptance test for attach mode: a .NET Framework 4.7.2 WPF process that does not
     /// reference Scry at all, inspected and driven from outside. Covers the three things that make
     /// attach mode worth having, and that the modern-.NET console test above cannot show:

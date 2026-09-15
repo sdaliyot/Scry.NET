@@ -24,6 +24,15 @@ internal static class CliContract
     [
         F("--target", "string", false, "Target ID or alias; mutually exclusive with --descriptor."),
         F("--descriptor", "string", false, "Path to a target descriptor; mutually exclusive with --target."),
+        F(
+            "--address",
+            "host:port|port|auto",
+            false,
+            "Connect over TCP instead of the named pipe, to <host:port> (loopback only), a bare " +
+            "port (host defaults to 127.0.0.1), or 'auto' to use the descriptor's own published " +
+            "TCP address/port. Requires a target whose host was started with a TCP listener " +
+            "enabled (see 'scry help attach' for --tcp-port); --target can never resolve a " +
+            "remote target, so this is meaningful only together with --descriptor."),
         F("--session", "string", false, "Resume a persistent session instead of using an ephemeral one."),
         F("--correlation", "string", false, "Correlation ID echoed back on the response."),
         F("--request", "file|-", false, "JSON request object from a file, or - for stdin."),
@@ -62,7 +71,7 @@ internal static class CliContract
         Local(
             "attach",
             "Inject the endpoint into a running process that does not reference Scry.",
-            "scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none]",
+            "scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>]",
             "scry attach 1234 --adapters wpf",
             [
                 new CliField(
@@ -81,9 +90,19 @@ internal static class CliContract
                     false,
                     "Desktop adapter to wire inside the target. Defaults to none, which leaves " +
                     "the endpoint framework-neutral: no wpf.*/winforms.* operations and no " +
-                    "\"marshal\": \"ui\", so submissions cannot touch a DependencyObject or Control.")
+                    "\"marshal\": \"ui\", so submissions cannot touch a DependencyObject or Control."),
+                new CliField(
+                    "--tcp-port",
+                    "integer",
+                    false,
+                    "Start a loopback TCP listener alongside the named pipe: 0 binds a free port, " +
+                    "1-65535 binds that fixed port. Off by default. Reachable through a port " +
+                    "forward (see README, \"Reaching an endpoint on another machine\"). Any local " +
+                    "process, as any Windows user, can attempt a handshake against it; the " +
+                    "capability token is the only gate. The bound port is printed in this " +
+                    "command's own output - never the token.")
             ],
-            "Attach result with the target descriptor path and a real protocol handshake; never the capability token."),
+            "Attach result with the target descriptor path, the bound TCP port when --tcp-port was given, and a real protocol handshake; never the capability token."),
         Local(
             "schema",
             "Emit the machine-readable CLI command and response contract.",
@@ -461,7 +480,7 @@ internal static class CliContract
                 """
                 Usage:
                   scry discover
-                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none]
+                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>]
                   scry schema
                   scry <command> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry jobs <start|status|wait|cancel|logs> (--target <id-or-alias> | --descriptor <path>) [options]
@@ -482,6 +501,11 @@ internal static class CliContract
 
                 Common target options:
                   --target <id-or-alias> | --descriptor <path>
+                  --address <host:port|port|auto>
+                                          Connect over TCP instead of the named pipe - to reach an
+                                          endpoint on another machine through a port forward. Only
+                                          meaningful with --descriptor: --target resolves through
+                                          local discovery, which can never surface a remote target.
                   --session <id>          Resume a persistent session.
                   --correlation <id>      Echo an agent-supplied correlation ID.
                   --request <file|->      Read a JSON request object from a file or stdin.
@@ -492,6 +516,13 @@ internal static class CliContract
                 C# source is accepted through --source <file|-> or redirected stdin. Use --request
                 for execution settings plus source. --json is retained for non-sensitive,
                 non-execution compatibility; prefer files or stdin for agent workflows.
+
+                Reaching an endpoint on another machine: start the target with
+                'scry attach <pid> --tcp-port 0' (or EndpointOptions.TcpPort/RuntimeHostOptions.TcpPort
+                in-process), copy its descriptor to this machine, forward a local port to it (for
+                example 'ssh -L 9000:127.0.0.1:<bound-port> user@target-host'), then pass
+                --descriptor <path> --address 127.0.0.1:9000. See README.md, "Reaching an endpoint
+                on another machine", for the full worked recipe and the trust-boundary tradeoff.
 
                 Exit codes: 0 success, 2 usage/JSON, 3 target, 4 connection/protocol,
                 5 target operation, 6 scenario partial failure, 70 unexpected CLI failure.
@@ -722,7 +753,13 @@ internal static class CliContract
             "ScenarioRequest JSON object from --input, --request-compatible stdin, or compatibility --json.",
             [
                 F("mode", "sequential|concurrent", true, "Execution mode."),
-                F("commands", "ScenarioCommand[]", true, "Ordered commands, each with one target or descriptor.")
+                F(
+                    "commands",
+                    "ScenarioCommand[]",
+                    true,
+                    "Ordered commands, each with one target or descriptor. A command may also " +
+                    "carry address (host:port|port|auto) to connect over TCP instead of the pipe " +
+                    "- the way to mix a local target with a remote one in a single scenario.")
             ],
             "ScenarioResult.",
             example);

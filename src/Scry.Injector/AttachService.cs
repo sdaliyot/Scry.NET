@@ -14,6 +14,13 @@ public sealed class AttachOptions
     /// </summary>
     public string? Adapters { get; init; }
 
+    /// <summary>
+    /// Starts a loopback TCP listener inside the attached endpoint alongside the named pipe: null
+    /// (the default) starts no listener, 0 binds a free port, 1-65535 binds that fixed port. See
+    /// <c>RuntimeHostOptions.TcpPort</c> for the trust-boundary implications.
+    /// </summary>
+    public int? TcpPort { get; init; }
+
     public string ComponentRoot { get; init; } = AppContext.BaseDirectory;
 
     public TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(15);
@@ -25,10 +32,11 @@ public static class AttachService
         string target,
         string? alias = null,
         string? adapters = null,
+        int? tcpPort = null,
         CancellationToken cancellationToken = default) =>
         AttachAsync(
             ProcessTargetResolver.Resolve(target),
-            new AttachOptions { Alias = alias, Adapters = adapters },
+            new AttachOptions { Alias = alias, Adapters = adapters, TcpPort = tcpPort },
             cancellationToken);
 
     public static async Task<AttachResult> AttachAsync(
@@ -68,7 +76,7 @@ public static class AttachService
                 throw new InjectionException(InjectionErrorCode.BindingConflict, conflict);
             }
 
-            NativeBootstrap.Inject(inspection, components, selected.Alias, selected.Adapters);
+            NativeBootstrap.Inject(inspection, components, selected.Alias, selected.Adapters, selected.TcpPort);
 
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutSource.CancelAfter(selected.StartupTimeout);

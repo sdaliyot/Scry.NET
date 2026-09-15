@@ -42,6 +42,18 @@ public static class TargetDiscovery
             try
             {
                 var descriptor = await ReadAsync(path, cancellationToken).ConfigureAwait(false);
+
+                // A descriptor carried here from another machine (a remote endpoint's file
+                // copied into the local targets directory by mistake) must be left alone rather
+                // than treated as a stale local rendezvous file and deleted. A null MachineName
+                // is a descriptor written before this field existed; treat it exactly as before -
+                // as local - so old descriptors keep today's behaviour unchanged.
+                if (descriptor.MachineName is not null &&
+                    !string.Equals(descriptor.MachineName, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 using var process = Process.GetProcessById(descriptor.Target.ProcessId);
                 if (!process.HasExited &&
                     process.StartTime.ToUniversalTime() == descriptor.Target.StartedAt.UtcDateTime)
@@ -114,6 +126,21 @@ public static class TargetDiscovery
             string.IsNullOrWhiteSpace(descriptor.CapabilityToken))
         {
             throw new InvalidDataException($"Descriptor '{path}' is structurally invalid.");
+        }
+
+        // A half-written TCP descriptor must fail here, at read, rather than surfacing as a
+        // confusing connect-time failure: the address and port are both-or-neither, and the
+        // published port must be an actually-bound one (0 is only ever an input option).
+        if ((descriptor.TcpAddress is null) != (descriptor.TcpPort is null))
+        {
+            throw new InvalidDataException(
+                $"Descriptor '{path}' has a TCP address without a port, or vice versa.");
+        }
+
+        if (descriptor.TcpPort is { } port && port is < 1 or > 65535)
+        {
+            throw new InvalidDataException(
+                $"Descriptor '{path}' has an out-of-range TCP port {port}.");
         }
     }
 }

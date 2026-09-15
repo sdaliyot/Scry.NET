@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -14,14 +16,27 @@ namespace Scry.Runtime;
 
 public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 {
+    /// <summary>
+    /// Caps concurrent, not-yet-handshaken TCP connections. Unlike the named pipe - which Windows
+    /// refuses to any other user before a single byte is read - any local process can open a TCP
+    /// socket, and the accept loop spawns a handler and writes an audit record per connection
+    /// before the capability token is even checked. Without a cap, that is free amplification
+    /// against the audit log's file-rotation budget. The pipe has no equivalent cap because the OS
+    /// peer check already stands in front of it.
+    /// </summary>
+    private const int MaximumPendingTcpConnections = 256;
+
     private readonly CancellationTokenSource _stopping = new();
-    private readonly ConcurrentDictionary<int, NamedPipeServerStream> _connections = new();
+    private readonly ConcurrentDictionary<int, Stream> _connections = new();
     private readonly ConcurrentDictionary<int, Task> _handlers = new();
+    private readonly SemaphoreSlim _tcpConnectionGate = new(MaximumPendingTcpConnections, MaximumPendingTcpConnections);
     private readonly SessionManager _sessions;
     private readonly OperationDispatcher _dispatcher;
     private readonly JobManager _jobs;
     private readonly AuditLog _audit;
-    private readonly Task _acceptTask;
+    private readonly Task _pipeAcceptTask;
+    private readonly Task _tcpAcceptTask;
+    private readonly TcpListener? _tcpListener;
     private readonly EventHandler _processExitHandler;
     private int _connectionId;
     private int _disposed;
@@ -73,68 +88,114 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         var targetId = Guid.NewGuid().ToString("N");
         var pipeName = $"scry-{Guid.NewGuid():N}";
         var token = Convert.ToBase64String(RuntimeCompatibility.GetRandomBytes(32));
-        Metadata = new(
-            targetId,
-            options.Alias,
-            process.Id,
-            process.ProcessName,
-            Environment.Version.ToString(),
-            RuntimeInformation.FrameworkDescription,
-            RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
-            process.StartTime.ToUniversalTime())
-        {
-            Aliases = options.Aliases
-                .Append(options.Alias)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
-                .ToArray()
-        };
-        Descriptor = new(
-            ProtocolConstants.Version,
-            Metadata,
-            pipeName,
-            token,
-            DateTimeOffset.UtcNow);
-        DescriptorPath = TargetDiscovery.GetDescriptorPath(targetId);
 
-        _sessions = new(
-            targetId,
-            options.HandleLease,
-            options.SessionLease,
-            options.MaximumPreviewLength,
-            options.MaximumHandlesPerSession,
-            options.MaximumSessions);
-        var assemblies = new AssemblyCatalog(options);
-        var execution = new ExecutionEngine(configuration, options, assemblies);
-        _dispatcher = new(Metadata, configuration, assemblies, execution);
-        _jobs = new(
-            _dispatcher,
-            targetId,
-            options.JobRetention,
-            options.MaximumJobs,
-            options.MaximumJobLogEntries,
-            options.MaximumJobLogMessageLength);
-        _audit = new(
-            options.AuditEnabled,
-            options.AuditDirectory,
-            options.AuditCallback,
-            process.Id);
-        PublishDescriptor();
-        // After the publish, not before: a publish failure must not be reported as a successful
-        // start.
-        _audit.Write(new(
-            AuditEventKinds.EndpointStarted,
-            DateTimeOffset.UtcNow,
-            targetId,
-            AuditOutcomes.Started)
+        if (options.TcpPort is { } requestedPort && requestedPort is < 0 or > 65535)
         {
-            Alias = options.Alias,
-            ProcessId = process.Id,
-            HostUser = AuditLog.CurrentHostUser()
-        });
-        _processExitHandler = (_, _) => CleanupDescriptor();
-        AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
-        _acceptTask = AcceptConnectionsAsync(_stopping.Token);
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "TcpPort must be 0-65535, or null to start no TCP listener.");
+        }
+
+        // The socket must be bound before Descriptor is constructed, so the descriptor can
+        // publish the port actually bound (which matters when the caller asked for port 0). That
+        // puts a bind ahead of the rest of this constructor, which can still throw - so from here
+        // on everything is wrapped in a try/catch that stops a bound-but-unpublished listener
+        // rather than leaking it until GC.
+        try
+        {
+            if (options.TcpPort is { } port)
+            {
+                _tcpListener = new TcpListener(IPAddress.Loopback, port);
+                try
+                {
+                    _tcpListener.Start();
+                }
+                catch (SocketException exception)
+                {
+                    throw new InvalidOperationException(
+                        $"Could not bind TCP port {port}: {exception.Message}", exception);
+                }
+            }
+
+            var boundTcpPort = _tcpListener is null
+                ? (int?)null
+                : ((IPEndPoint)_tcpListener.LocalEndpoint).Port;
+
+            Metadata = new(
+                targetId,
+                options.Alias,
+                process.Id,
+                process.ProcessName,
+                Environment.Version.ToString(),
+                RuntimeInformation.FrameworkDescription,
+                RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
+                process.StartTime.ToUniversalTime())
+            {
+                Aliases = options.Aliases
+                    .Append(options.Alias)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+            };
+            Descriptor = new(
+                ProtocolConstants.Version,
+                Metadata,
+                pipeName,
+                token,
+                DateTimeOffset.UtcNow,
+                TcpAddress: boundTcpPort is null ? null : IPAddress.Loopback.ToString(),
+                TcpPort: boundTcpPort,
+                MachineName: Environment.MachineName);
+            DescriptorPath = TargetDiscovery.GetDescriptorPath(targetId);
+
+            _sessions = new(
+                targetId,
+                options.HandleLease,
+                options.SessionLease,
+                options.MaximumPreviewLength,
+                options.MaximumHandlesPerSession,
+                options.MaximumSessions);
+            var assemblies = new AssemblyCatalog(options);
+            var execution = new ExecutionEngine(configuration, options, assemblies);
+            _dispatcher = new(Metadata, configuration, assemblies, execution);
+            _jobs = new(
+                _dispatcher,
+                targetId,
+                options.JobRetention,
+                options.MaximumJobs,
+                options.MaximumJobLogEntries,
+                options.MaximumJobLogMessageLength);
+            _audit = new(
+                options.AuditEnabled,
+                options.AuditDirectory,
+                options.AuditCallback,
+                process.Id);
+            PublishDescriptor();
+            // After the publish, not before: a publish failure must not be reported as a successful
+            // start.
+            _audit.Write(new(
+                AuditEventKinds.EndpointStarted,
+                DateTimeOffset.UtcNow,
+                targetId,
+                AuditOutcomes.Started)
+            {
+                Alias = options.Alias,
+                ProcessId = process.Id,
+                HostUser = AuditLog.CurrentHostUser(),
+                Detail = boundTcpPort is null ? null : $"tcp=127.0.0.1:{boundTcpPort}"
+            });
+            _processExitHandler = (_, _) => CleanupDescriptor();
+            AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
+            _pipeAcceptTask = AcceptPipeConnectionsAsync(_stopping.Token);
+            _tcpAcceptTask = _tcpListener is null
+                ? Task.CompletedTask
+                : AcceptTcpConnectionsAsync(_stopping.Token);
+        }
+        catch
+        {
+            _tcpListener?.Stop();
+            throw;
+        }
     }
 
     public TargetMetadata Metadata { get; }
@@ -164,6 +225,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 #else
         await _stopping.CancelAsync().ConfigureAwait(false);
 #endif
+        // Stopped before awaiting the accept task: this is what unblocks a pending AcceptSocketAsync
+        // on .NET Framework, which has no cancellable overload, and it also ensures the port is
+        // refused to any new caller immediately rather than only once the accept task notices.
+        _tcpListener?.Stop();
         foreach (var connection in _connections.Values)
         {
             connection.Dispose();
@@ -171,9 +236,18 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
         try
         {
-            await _acceptTask.ConfigureAwait(false);
+            await _pipeAcceptTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
+        {
+        }
+
+        try
+        {
+            await _tcpAcceptTask.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is OperationCanceledException or SocketException or ObjectDisposedException)
         {
         }
 
@@ -204,7 +278,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         await _audit.DisposeAsync().ConfigureAwait(false);
     }
 
-    private async Task AcceptConnectionsAsync(CancellationToken cancellationToken)
+    private async Task AcceptPipeConnectionsAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -213,21 +287,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             {
                 pipe = CreatePipe();
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-                var id = Interlocked.Increment(ref _connectionId);
-                _connections[id] = pipe;
-                var handler = HandleConnectionAsync(id, pipe, cancellationToken);
-                _handlers[id] = handler;
-                _ = handler.ContinueWith(
-                    (completedTask, state) =>
-                    {
-                        var tuple = ((RuntimeHost Host, int Id))state!;
-                        tuple.Host._handlers.TryRemove(tuple.Id, out _);
-                        _ = completedTask.Exception;
-                    },
-                    (this, id),
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
+                RegisterConnection(pipe, ScryTransports.Pipe, null, releaseTcpGate: false, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -243,16 +303,100 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         }
     }
 
+    private async Task AcceptTcpConnectionsAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            Socket? socket = null;
+            try
+            {
+#if NETFRAMEWORK
+                socket = await _tcpListener!.AcceptSocketAsync().ConfigureAwait(false);
+#else
+                socket = await _tcpListener!.AcceptSocketAsync(cancellationToken).ConfigureAwait(false);
+#endif
+                if (!_tcpConnectionGate.Wait(0))
+                {
+                    // The pre-handshake cap is full: refuse before spawning a handler or writing
+                    // an audit record for this connection, since neither is free.
+                    socket.Dispose();
+                    continue;
+                }
+
+                socket.NoDelay = true;
+                var peerAddress = socket.RemoteEndPoint?.ToString();
+                var stream = new NetworkStream(socket, ownsSocket: true);
+                RegisterConnection(stream, ScryTransports.Tcp, peerAddress, releaseTcpGate: true, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                socket?.Dispose();
+                break;
+            }
+            // A SocketException here matters more than the pipe's IOException equivalent: without
+            // catching it, one transient accept failure would fault this loop and TCP would stop
+            // accepting silently for the rest of the host's lifetime. ObjectDisposedException and
+            // SocketException both also occur here, expectedly, once Dispose stops the listener.
+            catch (Exception exception) when (
+                exception is IOException or SocketException or ObjectDisposedException)
+            {
+                socket?.Dispose();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The tail shared by both accept loops once each has obtained a <see cref="Stream"/>: id
+    /// assignment, dictionary bookkeeping, spawning the handler, and its cleanup continuation. The
+    /// two loops differ only in how they obtain that stream.
+    /// </summary>
+    private void RegisterConnection(
+        Stream stream,
+        string transport,
+        string? peerAddress,
+        bool releaseTcpGate,
+        CancellationToken cancellationToken)
+    {
+        var id = Interlocked.Increment(ref _connectionId);
+        _connections[id] = stream;
+        var handler = HandleConnectionAsync(id, stream, transport, peerAddress, cancellationToken);
+        _handlers[id] = handler;
+        _ = handler.ContinueWith(
+            (completedTask, state) =>
+            {
+                var tuple = ((RuntimeHost Host, int Id, bool ReleaseTcpGate))state!;
+                tuple.Host._handlers.TryRemove(tuple.Id, out _);
+                if (tuple.ReleaseTcpGate)
+                {
+                    tuple.Host._tcpConnectionGate.Release();
+                }
+
+                _ = completedTask.Exception;
+            },
+            (this, id, releaseTcpGate),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     private async Task HandleConnectionAsync(
         int connectionId,
-        NamedPipeServerStream pipe,
+        Stream stream,
+        string transport,
+        string? peerAddress,
         CancellationToken cancellationToken)
     {
         string? sessionId = null;
         var ephemeralSession = false;
         try
         {
-            var handshakeFrame = await FrameCodec.ReadAsync<ProtocolRequest>(pipe, cancellationToken)
+            var handshakeFrame = await FrameCodec.ReadAsync<ProtocolRequest>(stream, cancellationToken)
                 .ConfigureAwait(false);
             if (handshakeFrame is null)
             {
@@ -261,9 +405,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
             if (handshakeFrame.Operation != "handshake")
             {
-                _audit.Write(DeniedHandshake(connectionId, "handshake_required"));
+                _audit.Write(DeniedHandshake(connectionId, transport, peerAddress, "handshake_required"));
                 await WriteFailureAsync(
-                    pipe,
+                    stream,
                     handshakeFrame.RequestId,
                     null,
                     "handshake_required",
@@ -291,9 +435,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             catch (Exception exception) when (
                 exception is JsonException or InvalidOperationException or ProtocolException)
             {
-                _audit.Write(DeniedHandshake(connectionId, "invalid_handshake"));
+                _audit.Write(DeniedHandshake(connectionId, transport, peerAddress, "invalid_handshake"));
                 await WriteFailureAsync(
-                    pipe,
+                    stream,
                     handshakeFrame.RequestId,
                     null,
                     "invalid_handshake",
@@ -307,9 +451,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             {
                 // Never the supplied token, even in the audit log - a wrong token here could be a
                 // valid token for a different live target, and there can be several.
-                _audit.Write(DeniedHandshake(connectionId, "authentication_failed", handshake.ClientName));
+                _audit.Write(DeniedHandshake(connectionId, transport, peerAddress, "authentication_failed", handshake.ClientName));
                 await WriteFailureAsync(
-                    pipe,
+                    stream,
                     handshakeFrame.RequestId,
                     null,
                     "authentication_failed",
@@ -322,9 +466,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             if (handshake.MinimumVersion > ProtocolConstants.Version ||
                 handshake.MaximumVersion < ProtocolConstants.Version)
             {
-                _audit.Write(DeniedHandshake(connectionId, "protocol_version_mismatch", handshake.ClientName));
+                _audit.Write(DeniedHandshake(connectionId, transport, peerAddress, "protocol_version_mismatch", handshake.ClientName));
                 await WriteFailureAsync(
-                    pipe,
+                    stream,
                     handshakeFrame.RequestId,
                     null,
                     "protocol_version_mismatch",
@@ -347,7 +491,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 ProtocolConstants.AllCapabilities,
                 session.ExpiresAt);
             await FrameCodec.WriteAsync(
-                pipe,
+                stream,
                 ProtocolResponse.Succeeded(handshakeFrame.RequestId, session.Id, result),
                 cancellationToken).ConfigureAwait(false);
             _audit.Write(new(
@@ -357,14 +501,16 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 AuditOutcomes.Succeeded)
             {
                 ConnectionId = connectionId,
+                Transport = transport,
+                PeerAddress = peerAddress,
                 SessionId = session.Id,
                 ClientName = clientName,
                 Detail = handshake.SessionId is null ? "created" : "resumed"
             });
 
-            while (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                var request = await FrameCodec.ReadAsync<ProtocolRequest>(pipe, cancellationToken)
+                var request = await FrameCodec.ReadAsync<ProtocolRequest>(stream, cancellationToken)
                     .ConfigureAwait(false);
                 if (request is null)
                 {
@@ -439,6 +585,8 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                     response.Success ? AuditOutcomes.Succeeded : AuditOutcomes.Failed)
                 {
                     ConnectionId = connectionId,
+                    Transport = transport,
+                    PeerAddress = peerAddress,
                     SessionId = session.Id,
                     ClientName = session.ClientName,
                     Operation = AuditLog.Bound(request.Operation),
@@ -449,7 +597,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                     Detail = AuditLog.DescribePayload(request.Operation, request.Payload)
                 });
 
-                await FrameCodec.WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);
+                await FrameCodec.WriteAsync(stream, response, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (Exception exception)
@@ -466,6 +614,8 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                     AuditOutcomes.Failed)
                 {
                     ConnectionId = connectionId,
+                    Transport = transport,
+                    PeerAddress = peerAddress,
                     SessionId = sessionId,
                     ErrorCode = exception is ScryOperationException operationException
                         ? operationException.Code
@@ -474,12 +624,12 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 });
             }
 
-            if (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
+            if (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
                     await WriteFailureAsync(
-                        pipe,
+                        stream,
                         "unknown",
                         sessionId,
                         exception is ScryOperationException operationException2
@@ -503,7 +653,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             }
 
             _connections.TryRemove(connectionId, out _);
-            pipe.Dispose();
+            stream.Dispose();
         }
     }
 
@@ -523,7 +673,12 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         await FrameCodec.WriteAsync(stream, response, cancellationToken).ConfigureAwait(false);
     }
 
-    private AuditRecord DeniedHandshake(int connectionId, string errorCode, string? clientName = null) =>
+    private AuditRecord DeniedHandshake(
+        int connectionId,
+        string transport,
+        string? peerAddress,
+        string errorCode,
+        string? clientName = null) =>
         new(
             AuditEventKinds.Handshake,
             DateTimeOffset.UtcNow,
@@ -531,6 +686,8 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             AuditOutcomes.Denied)
         {
             ConnectionId = connectionId,
+            Transport = transport,
+            PeerAddress = peerAddress,
             ErrorCode = errorCode,
             ClientName = AuditLog.Bound(clientName)
         };

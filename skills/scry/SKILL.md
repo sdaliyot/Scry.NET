@@ -9,7 +9,8 @@ Use this Skill when an agent must inspect or control a running .NET application 
 opted into Scry.NET. The `scry` CLI is the only agent interface in this release. Do not
 connect to named pipes directly and do not read capability tokens from descriptor files.
 
-Scry.NET is Windows-only, local-only tooling for development and testing. It can inspect private
+Scry.NET is Windows-only tooling for development and testing. Endpoints are local-only unless the
+target deliberately opted into a TCP listener, which is off by default. It can inspect private
 state, mutate objects, invoke methods, and execute C# inside the target process. Use it only on
 applications the user deliberately started or enabled for development or testing.
 
@@ -779,6 +780,34 @@ Representative result:
 
 Exit code `6` means at least one item failed. Inspect all results. Retry only failed,
 idempotent items after rediscovery; do not repeat successful mutations.
+
+## Reaching a target on another machine
+
+`scry discover` and `--target <alias>` only ever look at the local
+`%LOCALAPPDATA%\Scry\targets` directory - they can never surface a target that lives on another
+machine. A remote target is always addressed with `--descriptor <path>` (the copied descriptor
+file, kept outside the local targets directory) plus `--address <host:port|port|auto>`, never with
+`--target`.
+
+Remote execution (`Invoke-Command` or equivalent) is needed only for the **one-time setup**: attach
+on the remote machine with `scry attach <pid> --tcp-port 0`, copy the resulting descriptor to this
+machine, and stand up a port forward to the bound port. Once the forward is up, every subsequent
+command runs **locally** and simply dials the forwarded port - do not shell out to the remote
+machine per request; that defeats the reason this exists (a fresh ephemeral session per remote
+invocation would drop every leased handle).
+
+```powershell
+scry evaluate --descriptor .\remote-target.json --address 127.0.0.1:9000 --source "1 + 1"
+```
+
+A `scenario` command can mix a local selector (`target` or a local `descriptor`) with a remote one
+(`descriptor` plus `address`) in the same flow - this is the intended way to drive a local desktop
+client and assert on a remote server component as one call. See
+[`README.md`, "Reaching an endpoint on another machine"](../../README.md#reaching-an-endpoint-on-another-machine)
+for the full setup recipe and the trust tradeoff (a loopback TCP listener has no OS peer check; the
+capability token in the descriptor is the only gate). Treat a remote descriptor with the same care
+as a local one - never copy it into logs, chat, or source control - and delete it once the task is
+done, since it is a bearer credential for the remote endpoint's whole lifetime.
 
 ## Structured error recovery
 

@@ -1,4 +1,6 @@
 using System.IO.Pipes;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using Scry.Contracts;
 
@@ -6,16 +8,18 @@ namespace Scry.Client;
 
 public sealed class ScryClient : IAsyncDisposable
 {
-    private readonly NamedPipeClientStream _pipe;
+    private readonly Stream _transport;
     private readonly SemaphoreSlim _requestLock = new(1, 1);
     private int _disposed;
 
     private ScryClient(
-        NamedPipeClientStream pipe,
+        Stream transport,
+        string transportKind,
         ConnectionDescriptor descriptor,
         HandshakeResult handshake)
     {
-        _pipe = pipe;
+        _transport = transport;
+        Transport = transportKind;
         Descriptor = descriptor;
         Handshake = handshake;
     }
@@ -23,6 +27,10 @@ public sealed class ScryClient : IAsyncDisposable
     public ConnectionDescriptor Descriptor { get; }
 
     public HandshakeResult Handshake { get; }
+
+    /// <summary><see cref="ScryTransports.Pipe"/> or <see cref="ScryTransports.Tcp"/> - which
+    /// transport this connection is actually using.</summary>
+    public string Transport { get; }
 
     /// <summary>
     /// How long a single request waits for its response before failing with a
@@ -39,6 +47,12 @@ public sealed class ScryClient : IAsyncDisposable
     /// compile can take seconds. Lower it for interactive use, raise it when driving work that
     /// is legitimately slow, or set <see cref="Timeout.InfiniteTimeSpan"/> to wait indefinitely.
     /// A cancellation token passed to the request still applies either way.
+    /// </para>
+    /// <para>
+    /// Note that the write side has no matching deadline here or over TCP: <see cref="FrameCodec.WriteAsync{T}"/>
+    /// races nothing, so a tunnel that stops draining (rather than the target itself going quiet)
+    /// can hold a write indefinitely. This is a pre-existing gap, newly reachable through a
+    /// forwarded connection; restructuring the request path to close it is out of scope here.
     /// </para>
     /// </summary>
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(60);
@@ -72,33 +86,18 @@ public sealed class ScryClient : IAsyncDisposable
 #else
             await pipe.ConnectAsync(timeoutSource.Token).ConfigureAwait(false);
 #endif
-            var request = new ProtocolRequest(
-                ProtocolConstants.Version,
-                Guid.NewGuid().ToString("N"),
-                "handshake",
-                JsonSerializer.SerializeToElement(
-                    new HandshakeRequest(
-                        descriptor.CapabilityToken,
-                        SessionId: sessionId,
-                        ClientName: clientName,
-                        EphemeralSession: ephemeralSession),
-                    ScryJson.Options));
-            await FrameCodec.WriteAsync(pipe, request, timeoutSource.Token).ConfigureAwait(false);
-            var response = await FrameCodec.ReadAsync<ProtocolResponse>(pipe, timeoutSource.Token)
-                .ConfigureAwait(false)
-                ?? throw new ProtocolException("The target closed during handshake.");
-            if (!response.Success)
-            {
-                throw new ScryRemoteException(response);
-            }
-
-            var handshake = response.Result?.Deserialize<HandshakeResult>(ScryJson.Options)
-                ?? throw new ProtocolException("The target returned an invalid handshake.");
-            return new(pipe, descriptor, handshake);
+            return await HandshakeAsync(
+                pipe,
+                ScryTransports.Pipe,
+                descriptor,
+                sessionId,
+                clientName,
+                ephemeralSession,
+                timeoutSource).ConfigureAwait(false);
         }
         catch
         {
-            await DisposePipeAsync(pipe).ConfigureAwait(false);
+            await DisposeTransportAsync(pipe).ConfigureAwait(false);
             throw;
         }
     }
@@ -122,6 +121,190 @@ public sealed class ScryClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Connects over TCP instead of the named pipe. Never implicit: a descriptor advertising a TCP
+    /// listener still connects over the pipe unless this method (or its
+    /// <paramref name="descriptorPath"/> overload) is called explicitly - otherwise every existing
+    /// local caller of the pipe overloads above would silently lose the OS peer gate the moment a
+    /// host happened to have TCP enabled.
+    /// <para>
+    /// <paramref name="address"/> is where to actually connect - typically the local end of a port
+    /// forward, which need not be the same port the endpoint itself bound. Null (or omitted) means
+    /// "use the descriptor's own <see cref="ConnectionDescriptor.TcpAddress"/>/
+    /// <see cref="ConnectionDescriptor.TcpPort"/>"; if the descriptor has neither and no address
+    /// was supplied, this throws rather than silently falling back to the pipe.
+    /// </para>
+    /// </summary>
+    public static async Task<ScryClient> ConnectOverTcpAsync(
+        ConnectionDescriptor descriptor,
+        ScryEndpointAddress? address = null,
+        string? sessionId = null,
+        TimeSpan? timeout = null,
+        string clientName = "Scry.Client",
+        bool ephemeralSession = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (descriptor is null)
+        {
+            throw new ArgumentNullException(nameof(descriptor));
+        }
+
+        var resolved = address ?? ResolveDescriptorAddress(descriptor);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout ?? TimeSpan.FromSeconds(10));
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            await ConnectSocketAsync(socket, resolved, timeoutSource.Token).ConfigureAwait(false);
+            socket.NoDelay = true;
+            var stream = new NetworkStream(socket, ownsSocket: true);
+            return await HandshakeAsync(
+                stream,
+                ScryTransports.Tcp,
+                descriptor,
+                sessionId,
+                clientName,
+                ephemeralSession,
+                timeoutSource).ConfigureAwait(false);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    public static async Task<ScryClient> ConnectOverTcpAsync(
+        string descriptorPath,
+        ScryEndpointAddress? address = null,
+        string? sessionId = null,
+        TimeSpan? timeout = null,
+        string clientName = "Scry.Client",
+        bool ephemeralSession = false,
+        CancellationToken cancellationToken = default)
+    {
+        var descriptor = await TargetDiscovery.ReadAsync(descriptorPath, cancellationToken)
+            .ConfigureAwait(false);
+        return await ConnectOverTcpAsync(
+            descriptor,
+            address,
+            sessionId,
+            timeout,
+            clientName,
+            ephemeralSession,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static ScryEndpointAddress ResolveDescriptorAddress(ConnectionDescriptor descriptor)
+    {
+        if (descriptor.TcpAddress is null || descriptor.TcpPort is null)
+        {
+            throw new InvalidOperationException(
+                "This descriptor has no TCP listener. Start the host with " +
+                "EndpointOptions.TcpPort (or RuntimeHostOptions.TcpPort) set, or pass an explicit " +
+                "address to ConnectOverTcpAsync.");
+        }
+
+        return new ScryEndpointAddress(descriptor.TcpAddress, descriptor.TcpPort.Value);
+    }
+
+#if NETFRAMEWORK
+    private static Task ConnectSocketAsync(
+        Socket socket,
+        ScryEndpointAddress address,
+        CancellationToken cancellationToken)
+    {
+        // net472 has no cancellable Socket.ConnectAsync, so race BeginConnect/EndConnect against
+        // the deadline the same way the pipe path already handles the same TFM gap.
+        var endpoint = new IPEndPoint(IPAddress.Parse(address.Host), address.Port);
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        socket.BeginConnect(endpoint, static asyncResult =>
+        {
+            var state = ((Socket Socket, TaskCompletionSource<bool> Completion))asyncResult.AsyncState!;
+            try
+            {
+                state.Socket.EndConnect(asyncResult);
+                state.Completion.TrySetResult(true);
+            }
+            catch (Exception exception)
+            {
+                state.Completion.TrySetException(exception);
+            }
+        }, (socket, completion));
+        return WithCancellationAsync(socket, completion, cancellationToken);
+    }
+
+    private static async Task WithCancellationAsync(
+        Socket socket,
+        TaskCompletionSource<bool> completion,
+        CancellationToken cancellationToken)
+    {
+        using var registration = cancellationToken.Register(static state =>
+        {
+            var tuple = ((Socket Socket, TaskCompletionSource<bool> Completion))state!;
+            tuple.Completion.TrySetCanceled();
+            try
+            {
+                tuple.Socket.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }, (socket, completion));
+        await completion.Task.ConfigureAwait(false);
+    }
+#else
+    private static async Task ConnectSocketAsync(
+        Socket socket,
+        ScryEndpointAddress address,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = new IPEndPoint(IPAddress.Parse(address.Host), address.Port);
+        await socket.ConnectAsync(endpoint, cancellationToken).ConfigureAwait(false);
+    }
+#endif
+
+    /// <summary>
+    /// Everything shared by both entry points once each has obtained a connected stream: sending
+    /// the handshake frame and interpreting the result. The two <c>ConnectAsync</c> overloads above
+    /// (pipe) and <see cref="ConnectOverTcpAsync(ConnectionDescriptor,ScryEndpointAddress?,string?,TimeSpan?,string,bool,CancellationToken)"/>
+    /// (TCP) converge here; behavior for the pipe overloads is unchanged from before this method
+    /// existed.
+    /// </summary>
+    private static async Task<ScryClient> HandshakeAsync(
+        Stream stream,
+        string transportKind,
+        ConnectionDescriptor descriptor,
+        string? sessionId,
+        string clientName,
+        bool ephemeralSession,
+        CancellationTokenSource timeoutSource)
+    {
+        var request = new ProtocolRequest(
+            ProtocolConstants.Version,
+            Guid.NewGuid().ToString("N"),
+            "handshake",
+            JsonSerializer.SerializeToElement(
+                new HandshakeRequest(
+                    descriptor.CapabilityToken,
+                    SessionId: sessionId,
+                    ClientName: clientName,
+                    EphemeralSession: ephemeralSession),
+                ScryJson.Options));
+        await FrameCodec.WriteAsync(stream, request, timeoutSource.Token).ConfigureAwait(false);
+        var response = await FrameCodec.ReadAsync<ProtocolResponse>(stream, timeoutSource.Token)
+            .ConfigureAwait(false)
+            ?? throw new ProtocolException("The target closed during handshake.");
+        if (!response.Success)
+        {
+            throw new ScryRemoteException(response);
+        }
+
+        var handshake = response.Result?.Deserialize<HandshakeResult>(ScryJson.Options)
+            ?? throw new ProtocolException("The target returned an invalid handshake.");
+        return new(stream, transportKind, descriptor, handshake);
+    }
+
     public Task<ProtocolResponse> RequestAsync(
         string operation,
         object? payload = null,
@@ -140,11 +323,12 @@ public sealed class ScryClient : IAsyncDisposable
     /// <para>
     /// Racing a delay rather than relying on the cancellation token alone, because on .NET
     /// Framework a <see cref="System.IO.Pipes.PipeStream"/> read does not observe cancellation
-    /// once it has started - the token is checked on the way in and then ignored. Disposing the
-    /// stream is what actually ends such a read, and the caller's catch does that. Without this
-    /// race the deadline works on .NET 9 and silently does nothing on .NET Framework, which is
-    /// the worse of the two failures because it only shows up on the target most likely to be
-    /// running a UI.
+    /// once it has started - the token is checked on the way in and then ignored. The same is true
+    /// of a <see cref="System.Net.Sockets.NetworkStream"/> read on both frameworks: a socket
+    /// receive that has already started ignores the token too, so this race is not a .NET
+    /// Framework-only concern once TCP is in the mix. Disposing the stream is what actually ends
+    /// such a read, and the caller's catch does that. Without this race the deadline would work
+    /// only when the underlying read happens to observe cancellation.
     /// </para>
     /// </summary>
     private static async Task<T?> WithDeadlineAsync<T>(Task<T?> pending, TimeSpan timeout, string operation)
@@ -163,9 +347,9 @@ public sealed class ScryClient : IAsyncDisposable
             return await pending.ConfigureAwait(false);
         }
 
-        // The read is still blocked and only ends when the pipe is disposed, which happens in the
-        // caller's catch. Observe its eventual fault so it does not surface as an unobserved
-        // task exception and tear down the host process later.
+        // The read is still blocked and only ends when the transport is disposed, which happens
+        // in the caller's catch. Observe its eventual fault so it does not surface as an
+        // unobserved task exception and tear down the host process later.
         _ = pending.ContinueWith(
             static task => _ = task.Exception,
             CancellationToken.None,
@@ -208,9 +392,9 @@ public sealed class ScryClient : IAsyncDisposable
                 CorrelationId = correlationId
             };
             ioStarted = true;
-            await FrameCodec.WriteAsync(_pipe, request, deadline.Token).ConfigureAwait(false);
+            await FrameCodec.WriteAsync(_transport, request, deadline.Token).ConfigureAwait(false);
             var response = await WithDeadlineAsync<ProtocolResponse>(
-                    FrameCodec.ReadAsync<ProtocolResponse>(_pipe, deadline.Token).AsTask(),
+                    FrameCodec.ReadAsync<ProtocolResponse>(_transport, deadline.Token).AsTask(),
                     timeout,
                     operation)
                 .ConfigureAwait(false)
@@ -231,7 +415,7 @@ public sealed class ScryClient : IAsyncDisposable
         {
             if (ioStarted && Interlocked.Exchange(ref _disposed, 1) == 0)
             {
-                await DisposePipeAsync(_pipe).ConfigureAwait(false);
+                await DisposeTransportAsync(_transport).ConfigureAwait(false);
             }
 
             throw new TimeoutException(
@@ -245,7 +429,7 @@ public sealed class ScryClient : IAsyncDisposable
         {
             if (ioStarted && Interlocked.Exchange(ref _disposed, 1) == 0)
             {
-                await DisposePipeAsync(_pipe).ConfigureAwait(false);
+                await DisposeTransportAsync(_transport).ConfigureAwait(false);
             }
 
             throw;
@@ -332,7 +516,7 @@ public sealed class ScryClient : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            return DisposePipeAsync(_pipe);
+            return DisposeTransportAsync(_transport);
         }
 
         return default;
@@ -346,13 +530,13 @@ public sealed class ScryClient : IAsyncDisposable
         }
     }
 
-    private static ValueTask DisposePipeAsync(NamedPipeClientStream pipe)
+    private static ValueTask DisposeTransportAsync(Stream stream)
     {
 #if NETFRAMEWORK
-        pipe.Dispose();
+        stream.Dispose();
         return default;
 #else
-        return pipe.DisposeAsync();
+        return stream.DisposeAsync();
 #endif
     }
 

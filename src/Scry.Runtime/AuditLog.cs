@@ -108,10 +108,14 @@ internal sealed class AuditLog : IAsyncDisposable
             : value.Length <= MaximumFieldLength ? value : value.Substring(0, MaximumFieldLength);
 
     /// <summary>
-    /// The host's Windows user name, captured once. Meaningful because the pipe accepts only
-    /// current-user connections (<c>PipeOptions.CurrentUserOnly</c> on .NET 9, an equivalent DACL
-    /// on .NET Framework - see <c>RuntimeHost.CreatePipe</c>), so every connection is guaranteed to
-    /// be this user, not merely likely to be.
+    /// The host's Windows user name, captured once. Over the named pipe this is meaningful as an
+    /// authenticated fact about the caller: the pipe accepts only current-user connections
+    /// (<c>PipeOptions.CurrentUserOnly</c> on .NET 9, an equivalent DACL on .NET Framework - see
+    /// <c>RuntimeHost.CreatePipe</c>), so every pipe connection is guaranteed to be this user, not
+    /// merely likely to be. Over a TCP connection there is no such guarantee - a loopback socket has
+    /// no DACL equivalent, so this value still identifies the <em>host process's</em> user but says
+    /// nothing about who connected; only the capability token does that. See
+    /// <see cref="AuditRecord.Transport"/> to tell which applies to a given record.
     /// </summary>
     public static string? CurrentHostUser()
     {

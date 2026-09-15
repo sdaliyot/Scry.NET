@@ -35,7 +35,8 @@ internal static class NativeBootstrap
         ProcessInspectionResult target,
         BootstrapComponents components,
         string? alias,
-        string? adapters)
+        string? adapters,
+        int? tcpPort = null)
     {
         var access = ProcessCreateThread |
             ProcessQueryInformation |
@@ -69,6 +70,7 @@ internal static class NativeBootstrap
                 components,
                 alias,
                 adapters,
+                tcpPort,
                 hostFxrPath,
                 statusPath,
                 statusPath + ".managed");
@@ -221,6 +223,7 @@ internal static class NativeBootstrap
         BootstrapComponents components,
         string? alias,
         string? adapters,
+        int? tcpPort,
         string? hostFxrPath,
         string statusPath,
         string managedErrorPath)
@@ -260,6 +263,15 @@ internal static class NativeBootstrap
                 "adapters=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(adapters)));
         }
 
+        if (tcpPort is { } port)
+        {
+            argumentLines.Add(
+                "tcpPort=" + Convert.ToBase64String(
+                    Encoding.UTF8.GetBytes(port.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        }
+
+        // No native header change is needed for this key: the argument blob is length-prefixed
+        // (kMaxArgumentLength in ScryBootstrap.cpp is 256 KiB), not a fixed-size buffer.
         var argument = Encoding.UTF8.GetBytes(string.Join("\n", argumentLines));
         references[4] = AddBytes(bytes, argument);
 

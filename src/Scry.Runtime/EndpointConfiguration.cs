@@ -65,6 +65,17 @@ public sealed class RuntimeHostOptions
     public string? AuditDirectory { get; init; }
 
     /// <summary>
+    /// Starts a loopback TCP listener alongside the named pipe when set: null (the default) starts
+    /// no listener, 0 binds an OS-assigned free port, and 1-65535 binds that fixed port. Off by
+    /// default, deliberately - a loopback TCP socket has no DACL and no per-user gate, so enabling
+    /// it means any local process, as any Windows user, can attempt a handshake; the capability
+    /// token is the only thing standing between such a process and the endpoint. See
+    /// <c>docs/threat-model.md</c> for the full trust-boundary discussion. There is deliberately no
+    /// bind-address option - the listener is always <see cref="System.Net.IPAddress.Loopback"/>.
+    /// </summary>
+    public int? TcpPort { get; init; }
+
+    /// <summary>
     /// Receives every audit record in addition to (or instead of, with <see cref="AuditEnabled"/>
     /// false) the file. Called on a background thread; a throwing or slow handler affects nothing
     /// but its own records.
