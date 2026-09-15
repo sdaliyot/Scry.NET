@@ -23,6 +23,10 @@ commands in which each one names its own target, sequentially or concurrently, a
 keep connections to several endpoints open together. So a single run can click the button in the
 desktop client and then assert - in the server process - that the request actually arrived and the
 record actually changed. End-to-end across the tiers, in one flow, with no log scraping in between.
+Those processes do not all have to be on one machine: an endpoint can opt into a loopback TCP
+listener reachable through a port forward, so the same flow spans the desktop client here and the
+server component on the box where it actually runs. See
+[reaching an endpoint on another machine](#reaching-an-endpoint-on-another-machine).
 
 It works on .NET 9 and .NET Framework 4.7.2, on Windows, x86 and x64.
 
@@ -456,13 +460,128 @@ and security boundaries.
 See [`docs/development.md`](docs/development.md) for the protocol, extension guidance, jobs,
 multi-target scenarios and assembly loading.
 
+## Reaching an endpoint on another machine
+
+**The division of labour.** Scry provides direct, session-preserving communication with an
+endpoint on another machine, so leased handles and `asReference` workflows keep working across the
+boundary. Everything around that is yours: performing the remote attach, transferring the
+descriptor and its capability token, and establishing the port forward. Scry does not perform
+remote injection, does not distribute credentials, and does not set up tunnels.
+
+The alternative - running the CLI remotely for every request - costs a process start and a
+remote-exec round trip per operation, and worse, each invocation gets a fresh ephemeral session, so
+a lease taken by one call is gone by the next. A TCP listener plus a port forward fixes that: the
+CLI (or your test) runs entirely on the local machine and talks through the forward as if the
+target were local.
+
+1. **On the target machine**, get an endpoint running with a TCP listener enabled - by either of the
+   [two hosting modes](#two-ways-to-get-an-endpoint-into-a-process).
+
+   *Attaching*, which needs no change to the application but does need to run **on** that machine -
+   `Invoke-Command` is the suggested route, since `CreateRemoteThread` is not itself remotable:
+   ```powershell
+   Invoke-Command -ComputerName target-host -ScriptBlock {
+       & 'C:\tools\scry\scry.exe' attach 4812 --tcp-port 0
+   }
+   ```
+   `--tcp-port 0` binds a free loopback port; the attach result's JSON names it (`tcpPort`), never
+   the capability token.
+
+   *Embedding*, when you own the application's code - one property on the options you already pass:
+   ```csharp
+   using var host = EndpointHost.Start(
+       builder => builder.RegisterRoot("orders", () => orderState),
+       new EndpointOptions { Alias = "checkout-worker", TcpPort = 0 });
+
+   // The actually-bound port, once 0 has been resolved. Also published in the descriptor.
+   Console.WriteLine($"Scry listening on 127.0.0.1:{host.TcpPort}");
+   ```
+   `TcpPort` is `null` by default in both modes, which starts no listener at all - the named pipe
+   only. Nothing becomes TCP-reachable unless you ask for it.
+2. **Copy the descriptor** from the remote machine (`%LOCALAPPDATA%\Scry\targets\<id>.json`) to the local
+   machine, to a path *outside* its own `%LOCALAPPDATA%\Scry\targets` - `Invoke-Command` with `Copy-Item`
+   is the suggested route. That file is a bearer credential: whoever holds it can drive the target for the
+   rest of the endpoint's lifetime, so delete it once you are done.
+3. **Establish a port forward** from the local machine to the target's bound port - `ssh -L
+   9000:127.0.0.1:<bound-port> user@target-host`, or `netsh interface portproxy` if SSH is not an
+   option.
+4. **Run against it** with `--descriptor` (pointed at the copied file) plus `--address`:
+   ```powershell
+   scry evaluate --descriptor .\remote-target.json --address 127.0.0.1:9000 --source "1 + 1"
+   ```
+   `--target <alias>` can never work here: discovery only ever looks at the local
+   `%LOCALAPPDATA%\Scry\targets` directory, so it cannot surface a target that lives on another
+   machine. `--address` also accepts a bare port (host defaults to `127.0.0.1`) or `auto`, meaning
+   "use the descriptor's own published TCP address and port" - useful when there is no forward
+   remapping the port. The flagship shape of this is a single `scry scenario` call whose commands
+   mix a local `descriptor`/`target` selector with a remote one carrying `address`: drive the
+   desktop client here, assert on the server component there, in one flow.
+
+**The trust tradeoff, stated plainly.** A named pipe has an OS-enforced peer check: Windows refuses
+the pipe to any user but the one that created it, before a single byte is read. A loopback TCP
+socket has no equivalent - any local process, running as any Windows user, can attempt a handshake
+against it. The 256-bit capability token is the only gate once TCP is enabled. That is why it is
+opt-in and off by default, and why the descriptor - the token's only carrier - must be treated as
+what it is: full remote-code-execution-equivalent access to that process, for as long as the
+endpoint runs. See [`docs/threat-model.md`](docs/threat-model.md) for the full reasoning.
+
+```mermaid
+%%{init: {"flowchart": {"subGraphTitleMargin": {"top": 6, "bottom": 12}}} }%%
+flowchart TB
+  subgraph agentMachine["Agent / test machine"]
+    desc["Copied descriptor file<br/>carries the capability token<br/>(outside %LOCALAPPDATA%/Scry/targets)"]
+    driver["scry CLI, or your test code"]
+    fwd["Port forward client<br/>ssh -L / netsh portproxy"]
+  end
+
+  attach["Remote attach, by you<br/>Invoke-Command runs scry attach --tcp-port"]
+  handoff["Descriptor handoff and port forward, by you<br/>either hosting mode needs these"]
+
+  subgraph targetMachine["Target machine"]
+    fwdserver["Port forward server side"]
+    subgraph proc["The application process"]
+      rt["Scry.Runtime<br/>named pipe + TCP listener<br/>both loopback-only"]
+    end
+    localdrv["Any local caller here<br/>still uses the named pipe"]
+  end
+
+  desc -- "token" --> driver
+  driver == "dials 127.0.0.1:&lt;forwarded port&gt;" ==> fwd
+  fwd == "forwarded bytes" ==> fwdserver
+  fwdserver == "127.0.0.1:&lt;bound TCP port&gt;" ==> rt
+  localdrv -. "named pipe, unaffected" .-> rt
+
+  attach -. "step 1: inject, start listener" .-> rt
+  handoff -. "step 2: copy across" .-> desc
+  handoff -. "step 3: establish" .-> fwd
+
+  classDef attachOnly stroke-dasharray:6 4,stroke-width:2px,stroke:#b5651d
+  class attach attachOnly
+```
+
+Legend. **Dashed arrows** are the one-time setup, done by hand once and numbered in the order you do
+them. **Bold solid arrows** are the steady-state request path, which runs on every request and
+executes *entirely from the agent machine* - the CLI or test dials its own local forwarded port, so
+nothing runs remotely per request. That is the whole point: compare it with shelling out to the CLI
+on the target machine for every operation.
+
+The **dashed orange border** means the same thing it does in the architecture diagram above:
+attach-mode only. Embedding replaces that box - the application starts its own listener via
+`EndpointOptions.TcpPort`, so step 1 disappears and only the descriptor handoff and the forward
+remain yours to arrange. The named pipe stays available to a local caller on the target machine
+throughout, unaffected by the TCP listener.
+
 ## Security, authorization and limits
 
 See [`docs/threat-model.md`](docs/threat-model.md) for the full reasoning - assets, the trust
 boundary, what the audit log does and does not prove, and what is deliberately not defended
 against. The summary:
 
-Scry.NET permits deliberate code execution and state mutation inside the target. It is **local-only tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently. Pipe names and tokens are random, pipes are current-user-only, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID. Do not expose descriptors or bridge the protocol to untrusted clients.
+Scry.NET permits deliberate code execution and state mutation inside the target. It is **tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently.
+
+**By default every endpoint is local-only, and that default is enforced by the operating system.** Pipe names and tokens are random, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID - so Windows refuses the pipe to any other user before a byte is read, independently of the token.
+
+**Opting into a TCP listener changes that boundary, and only you can opt in.** `TcpPort` is `null` unless set, and it binds loopback only - never a routable address - so the endpoint is still unreachable from another machine without a port forward that you establish. But a loopback socket has no `CurrentUserOnly` equivalent and no DACL: once enabled, any local process running as any Windows user can attempt a handshake, and the 256-bit capability token becomes the only gate. Reaching such an endpoint across machines therefore means the token crosses machines inside the descriptor, which makes that file a bearer credential granting code-execution-equivalent access to the process for as long as the endpoint runs. Treat it accordingly, and delete it when you are done. Do not expose descriptors or bridge the protocol to untrusted clients, and prefer the pipe wherever the caller really is local.
 
 Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
 

@@ -34,7 +34,8 @@ internal static class InjectorCli
             var result = await AttachService.AttachAsync(
                 parsed.Target,
                 parsed.Alias,
-                parsed.Adapters).ConfigureAwait(false);
+                parsed.Adapters,
+                parsed.TcpPort).ConfigureAwait(false);
             if (!result.Success)
             {
                 Write(result);
@@ -50,6 +51,9 @@ internal static class InjectorCli
                 success = true,
                 target = result.Target,
                 descriptorPath = result.DescriptorPath,
+                // The bound TCP port, so an operator learns it without opening the token-bearing
+                // descriptor file - never the capability token itself.
+                tcpPort = result.Descriptor!.TcpPort,
                 handshake = client.Handshake
             });
             return 0;

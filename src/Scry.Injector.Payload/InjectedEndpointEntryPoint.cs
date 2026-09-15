@@ -41,9 +41,7 @@ public static class InjectedEndpointEntryPoint
             var configuration = ParseConfiguration(argument);
             _host = EndpointHost.Start(
                 configure: builder => DesktopAdapterWiring.Apply(builder, configuration.Adapters),
-                options: configuration.Alias is null
-                    ? null
-                    : new EndpointOptions { Alias = configuration.Alias });
+                options: BuildOptions(configuration));
             return 0;
         }
         catch (Exception exception)
@@ -59,6 +57,7 @@ public static class InjectedEndpointEntryPoint
         string? alias = null;
         string? errorPath = null;
         string? adapters = null;
+        int? tcpPort = null;
         foreach (var line in argument.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = line.IndexOf('=');
@@ -81,9 +80,32 @@ public static class InjectedEndpointEntryPoint
             {
                 adapters = value;
             }
+            else if (name.Equals("tcpPort", StringComparison.OrdinalIgnoreCase))
+            {
+                // This method is also called a second time from inside the catch in Start, purely
+                // to recover ErrorPath for the failure diagnostic - a throw here would lose that
+                // diagnostic entirely and leave the attach failing with no trace anywhere. So a
+                // malformed or out-of-range value becomes null (no TCP listener) rather than an
+                // exception; RuntimeHostOptions.TcpPort validates the range and reports any real
+                // problem when EndpointHost.Start actually runs, where TryWriteFailure can record it.
+                tcpPort = int.TryParse(value, out var parsed) ? parsed : (int?)null;
+            }
         }
 
-        return new(alias, errorPath, adapters);
+        return new(alias, errorPath, adapters, tcpPort);
+    }
+
+    private static EndpointOptions BuildOptions(BootstrapConfiguration configuration)
+    {
+        // Options are built unconditionally - not only when Alias is not null, as before this
+        // field existed - since that pattern does not survive a second optional field: TcpPort
+        // must be threaded through even when Alias is null. EndpointOptions is a plain class
+        // (no "with" support), and its Alias property already supplies its own default when left
+        // unset, so the explicit alias fallback below is an if/else on which initializer to use
+        // rather than a copy-and-override.
+        return configuration.Alias is null
+            ? new EndpointOptions { TcpPort = configuration.TcpPort }
+            : new EndpointOptions { Alias = configuration.Alias, TcpPort = configuration.TcpPort };
     }
 
     private static string? Decode(string encoded)
@@ -130,5 +152,9 @@ public static class InjectedEndpointEntryPoint
     }
 #endif
 
-    private sealed record BootstrapConfiguration(string? Alias, string? ErrorPath, string? Adapters);
+    private sealed record BootstrapConfiguration(
+        string? Alias,
+        string? ErrorPath,
+        string? Adapters,
+        int? TcpPort = null);
 }

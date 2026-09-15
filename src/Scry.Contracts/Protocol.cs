@@ -252,18 +252,156 @@ public sealed record TargetMetadata(
     public IReadOnlyList<string>? Aliases { get; init; }
 }
 
+/// <param name="TcpAddress">
+/// The loopback address the TCP listener is bound to (always <c>127.0.0.1</c> when present).
+/// Null when the endpoint has no TCP listener - the common case, and byte-identical to a
+/// descriptor written before TCP support existed, since <see cref="ScryJson.Options"/> omits null
+/// members on write and a missing member binds to its declared default on read.
+/// </param>
+/// <param name="TcpPort">The bound TCP port, or null when there is no TCP listener. Must be
+/// 1-65535 when present: a descriptor always carries the port actually bound, and 0 (meaning
+/// "bind a free port") is only ever an input option, never a published value.</param>
+/// <param name="MachineName">
+/// The host machine's name (<see cref="Environment.MachineName"/>), so a descriptor carried onto
+/// another machine can be told apart from a local one by <see cref="TargetDiscovery.FindAsync"/>.
+/// Null on a descriptor written before this field existed; <see cref="TargetDiscovery.FindAsync"/>
+/// treats null the same as a local machine name, preserving its existing behaviour exactly.
+/// </param>
 public sealed record ConnectionDescriptor(
     int ProtocolVersion,
     TargetMetadata Target,
     string PipeName,
     string CapabilityToken,
-    DateTimeOffset PublishedAt);
+    DateTimeOffset PublishedAt,
+    string? TcpAddress = null,
+    int? TcpPort = null,
+    string? MachineName = null);
 
 public sealed record DiscoveredTarget(
     int ProtocolVersion,
     TargetMetadata Target,
     string DescriptorPath,
-    DateTimeOffset PublishedAt);
+    DateTimeOffset PublishedAt,
+    string? TcpAddress = null,
+    int? TcpPort = null);
+
+/// <summary>Values for <see cref="ConnectionDescriptor"/>'s implicit transport kind, and for
+/// <see cref="AuditRecord.Transport"/>/<c>ScryClient.Transport</c>.</summary>
+public static class ScryTransports
+{
+    public const string Pipe = "pipe";
+    public const string Tcp = "tcp";
+}
+
+/// <summary>
+/// A loopback host and port to connect to over TCP, distinct from the address a descriptor's own
+/// <see cref="ConnectionDescriptor.TcpAddress"/>/<see cref="ConnectionDescriptor.TcpPort"/>
+/// publish - this is what a caller supplies to reach that listener through a port forward, which
+/// may not be the same port the endpoint itself bound.
+/// <para>
+/// Restricted to loopback hosts by construction and by <see cref="Parse"/>, so "the cleartext
+/// capability token never crosses a network" holds on the client side too, not only at the
+/// listener.
+/// </para>
+/// </summary>
+public sealed record ScryEndpointAddress(string Host, int Port)
+{
+    public string Host { get; } = ValidateHost(Host);
+
+    public int Port { get; } = ValidatePort(Port);
+
+    /// <summary>
+    /// Parses <c>host:port</c>, <c>[::1]:port</c>, a bare <c>port</c> (host defaults to
+    /// <c>127.0.0.1</c>), or <c>auto</c>, meaning "use the descriptor's own TCP address/port"
+    /// (represented as a null return rather than an instance).
+    /// </summary>
+    public static ScryEndpointAddress? Parse(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new FormatException("An address cannot be empty.");
+        }
+
+        if (string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (int.TryParse(value, out var barePort))
+        {
+            return new ScryEndpointAddress("127.0.0.1", barePort);
+        }
+
+        if (value.StartsWith("[", StringComparison.Ordinal))
+        {
+            var closing = value.IndexOf(']');
+            if (closing < 0 || closing + 1 >= value.Length || value[closing + 1] != ':')
+            {
+                throw new FormatException($"'{value}' is not a valid host:port address.");
+            }
+
+            var bracketedHost = value.Substring(1, closing - 1);
+            var bracketedPortText = value.Substring(closing + 2);
+            if (!int.TryParse(bracketedPortText, out var bracketedPort))
+            {
+                throw new FormatException($"'{value}' is not a valid host:port address.");
+            }
+
+            return new ScryEndpointAddress(bracketedHost, bracketedPort);
+        }
+
+        var separator = value.LastIndexOf(':');
+        if (separator < 0)
+        {
+            throw new FormatException($"'{value}' is not a valid host:port address.");
+        }
+
+        var host = value.Substring(0, separator);
+        var portText = value.Substring(separator + 1);
+        if (!int.TryParse(portText, out var port))
+        {
+            throw new FormatException($"'{value}' is not a valid host:port address.");
+        }
+
+        return new ScryEndpointAddress(host, port);
+    }
+
+    private static string ValidateHost(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new ArgumentException("Host cannot be empty.", nameof(host));
+        }
+
+        var isLoopback =
+            string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "::1", StringComparison.Ordinal) ||
+            (host.StartsWith("127.", StringComparison.Ordinal) &&
+                System.Net.IPAddress.TryParse(host, out var parsed) &&
+                System.Net.IPAddress.IsLoopback(parsed));
+
+        if (!isLoopback)
+        {
+            throw new ArgumentException(
+                $"'{host}' is not a loopback host. Only 127.0.0.1, other 127.x.x.x addresses, " +
+                "::1, and localhost are accepted, because the capability token crosses this " +
+                "connection in cleartext and must never leave the local machine.",
+                nameof(host));
+        }
+
+        return host;
+    }
+
+    private static int ValidatePort(int port)
+    {
+        if (port is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be 1-65535.");
+        }
+
+        return port;
+    }
+}
 
 public sealed record ExternalReference(
     string TargetId,

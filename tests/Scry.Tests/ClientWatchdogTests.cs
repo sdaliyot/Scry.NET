@@ -139,6 +139,39 @@ public sealed class ClientWatchdogTests
     }
 
     /// <summary>
+    /// The same wedged-target scenario as
+    /// <see cref="A_target_that_never_answers_fails_the_request_instead_of_hanging"/>, but over
+    /// TCP. Worth its own test because a socket receive that has already started ignores
+    /// cancellation on <em>both</em> frameworks - unlike the named pipe, where that is a .NET
+    /// Framework-only quirk. See the "Racing a delay" remark on
+    /// <c>ScryClient.WithDeadlineAsync</c>, which used to describe this as net472-only before this
+    /// test existed to disprove that on net9.0 too.
+    /// </summary>
+    [Fact]
+    public async Task A_wedged_target_over_tcp_fails_the_request_instead_of_hanging()
+    {
+        var executor = new WedgeableExecutor();
+        await using var host = EndpointHost.Start(
+            builder => builder.UseExecutionMarshaller(executor.Marshal),
+            new EndpointOptions { TcpPort = 0 });
+        await using var client = await ScryClient.ConnectOverTcpAsync(host.DescriptorPath);
+        Assert.Equal(ScryTransports.Tcp, client.Transport);
+        client.RequestTimeout = RequestTimeout;
+
+        var request = client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest(NonCooperativeSource, Marshal: ExecutionMarshalTargets.UiThread));
+        var finished = await Task.WhenAny(request, Task.Delay(TestBudget));
+        Assert.True(
+            ReferenceEquals(finished, request),
+            $"The TCP request never returned within {TestBudget.TotalSeconds:0} seconds.");
+
+        var timeout = await Assert.ThrowsAsync<TimeoutException>(() => request);
+        Assert.Contains("did not respond", timeout.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(executor.IsWedged);
+    }
+
+    /// <summary>
     /// A one-thread executor that can be wedged and is never expected to recover. Deliberately
     /// not <see cref="IDisposable"/>: there is nothing safe to do in a Dispose, because the
     /// thread it owns is the thread the test froze.

@@ -65,6 +65,13 @@ public sealed class EndpointOptions
     public string? AuditDirectory { get; init; }
 
     /// <summary>
+    /// Starts a loopback TCP listener alongside the named pipe when set: null (the default) starts
+    /// no listener, 0 binds an OS-assigned free port, and 1-65535 binds that fixed port. See
+    /// <see cref="Scry.Runtime.RuntimeHostOptions.TcpPort"/> for the trust-boundary implications.
+    /// </summary>
+    public int? TcpPort { get; init; }
+
+    /// <summary>
     /// Receives every audit record in addition to (or instead of, with <see cref="AuditEnabled"/>
     /// false) the file. Called on a background thread; a throwing or slow handler affects nothing
     /// but its own records.
@@ -343,6 +350,9 @@ public sealed class EndpointHost : IAsyncDisposable, IDisposable
 
     public string DescriptorPath => _runtime.DescriptorPath;
 
+    /// <summary>The bound TCP port, or null when no TCP listener was started.</summary>
+    public int? TcpPort => _runtime.Descriptor.TcpPort;
+
     public RegistrationRegistry Registrations { get; }
 
     public static EndpointHost Start(
@@ -380,7 +390,8 @@ public sealed class EndpointHost : IAsyncDisposable, IDisposable
                 MaximumJobLogMessageLength = selected.MaximumJobLogMessageLength,
                 AuditEnabled = selected.AuditEnabled,
                 AuditDirectory = selected.AuditDirectory,
-                AuditCallback = selected.AuditCallback
+                AuditCallback = selected.AuditCallback,
+                TcpPort = selected.TcpPort
             });
         return new(runtime, builder.Registrations);
     }

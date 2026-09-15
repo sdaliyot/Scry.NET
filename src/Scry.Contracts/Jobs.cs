@@ -58,6 +58,13 @@ public sealed record ScenarioRequest(
     string Mode,
     IReadOnlyList<ScenarioCommand> Commands);
 
+/// <param name="Address">
+/// When present, connects over TCP to <paramref name="Address"/> (parsed with
+/// <see cref="ScryEndpointAddress.Parse"/>) instead of the named pipe - the flagship reason this
+/// exists: one <c>scry scenario</c> call can drive a local target and assert on a remote one.
+/// Only meaningful together with <see cref="Descriptor"/>, since <see cref="Target"/> resolves
+/// through local discovery and a remote target can never be discovered that way.
+/// </param>
 public sealed record ScenarioCommand(
     string Id,
     string Operation,
@@ -65,7 +72,8 @@ public sealed record ScenarioCommand(
     string? Target = null,
     string? Descriptor = null,
     string? SessionId = null,
-    string? CorrelationId = null);
+    string? CorrelationId = null,
+    string? Address = null);
 
 public sealed record ScenarioCommandResult(
     string Id,

@@ -22,7 +22,7 @@ the trust boundary, and what is deliberately not defended against versus what si
 | `Scry.SampleWpf` | Minimal runnable WPF embedded example |
 | `Scry.SampleWinForms` | Minimal runnable WinForms embedded example |
 | `Scry.AttachTarget` | Non-UI process that deliberately does not reference Scry |
-| `Scry.Tests` | Protocol, runtime, and discovery tests |
+| `Scry.Tests` | Protocol, runtime, discovery, and TCP transport tests (`TcpTransportTests.cs` - the loopback listener, address override, and cross-transport session resumption) |
 | `Scry.Wpf.Tests` | STA dispatcher tests for the optional WPF adapter |
 | `Scry.WinForms.Tests` | STA message-loop tests for the optional WinForms adapter |
 
@@ -52,6 +52,8 @@ The `Microsoft.NETFramework.ReferenceAssemblies.net472` package makes SDK-style 
 Frames are a 4-byte little-endian length followed by UTF-8 JSON. Protocol version 1 requires `handshake` first. The handshake authenticates a 256-bit random capability token, negotiates the version, creates or resumes a target-qualified session, and returns capabilities. Subsequent requests use structured success/error envelopes. Every handled request receives a target-generated `operationId`; a supplied `correlationId` is echoed, or defaults to that operation ID. Ordinary operation exceptions cross the boundary with type, message, stack, HResult, source, and recursively captured inner exceptions. Fatal runtime failures such as process termination, stack overflow, corrupted state, or fail-fast can bypass this boundary.
 
 Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. On .NET 9 the named pipe uses `PipeOptions.CurrentUserOnly`. On .NET Framework 4.7.2 the server creates a protected, non-inheriting DACL with an allow rule only for the current Windows user SID; it does not fall back to a broadly accessible pipe. Descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
+
+An endpoint can additionally start a loopback-only TCP listener (`RuntimeHostOptions.TcpPort` / `EndpointOptions.TcpPort` / `scry attach --tcp-port`), off by default, so a caller can reach it through a port forward set up outside Scry.NET (see `README.md`, "Reaching an endpoint on another machine"). `ScryClient.ConnectOverTcpAsync` never runs implicitly - a descriptor advertising a TCP listener still connects over the pipe unless a caller opts in explicitly. The pipe's per-user DACL has no TCP equivalent: enabling the listener means any local process, as any Windows user, can attempt a handshake, with the capability token as the only remaining gate. See `docs/threat-model.md` for the full trust-boundary discussion this requires.
 
 Sessions belong to one target. Object references contain target, session, and handle IDs, preventing accidental cross-target/session use. Handles are strong references with sliding leases, stable identity within a session, explicit release, and cleanup on expiry/session disposal. Previews are bounded and are not object serialization.
 

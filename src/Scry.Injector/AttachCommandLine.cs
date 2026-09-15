@@ -10,7 +10,8 @@ public static class AttachCommandLine
     /// <summary>Adapter selections accepted by <c>--adapters</c>.</summary>
     public static readonly string[] AdapterValues = ["wpf", "winforms", "none"];
 
-    public const string Usage = "<pid|process-name> [--alias <name>] [--adapters wpf|winforms|none]";
+    public const string Usage =
+        "<pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>]";
 
     public static AttachArguments Parse(string[] args)
     {
@@ -21,6 +22,7 @@ public static class AttachCommandLine
 
         string? alias = null;
         string? adapters = null;
+        int? tcpPort = null;
         for (var index = 1; index < args.Length; index++)
         {
             switch (args[index])
@@ -38,12 +40,22 @@ public static class AttachCommandLine
                     }
 
                     break;
+                case "--tcp-port":
+                    var rawPort = RequireValue(args, ref index, "--tcp-port");
+                    if (!int.TryParse(rawPort, out var parsedPort) || parsedPort is < 0 or > 65535)
+                    {
+                        throw new AttachUsageException(
+                            $"--tcp-port expects 0-65535; found '{rawPort}'.");
+                    }
+
+                    tcpPort = parsedPort;
+                    break;
                 default:
                     throw new AttachUsageException($"Unknown attach option '{args[index]}'.");
             }
         }
 
-        return new(args[0], alias, adapters);
+        return new(args[0], alias, adapters, tcpPort);
     }
 
     private static string RequireValue(string[] args, ref int index, string option)
@@ -57,6 +69,6 @@ public static class AttachCommandLine
     }
 }
 
-public sealed record AttachArguments(string Target, string? Alias, string? Adapters);
+public sealed record AttachArguments(string Target, string? Alias, string? Adapters, int? TcpPort = null);
 
 public sealed class AttachUsageException(string message) : Exception(message);

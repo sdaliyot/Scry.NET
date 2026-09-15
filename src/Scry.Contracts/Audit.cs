@@ -11,13 +11,17 @@ namespace Scry.Contracts;
 ///
 /// <para>
 /// Three fields identify who did something, and they carry different weight. <see cref="HostUser"/>
-/// is authenticated - the pipe only accepts connections from the current Windows user, so this is
-/// guaranteed rather than asserted. <see cref="ClientName"/> is whatever the connecting client
-/// claimed to be at handshake (<c>"scry"</c>, <c>"scry attach"</c>, a test's own name) - useful, but
-/// self-reported, and a hostile client could lie. There is deliberately no process-identity field:
-/// capturing one would need the first native interop in this assembly, which is a bigger cost than
-/// this warrants; the connection can be told apart from others by <see cref="ConnectionId"/> within
-/// one run, but not attributed to a specific process.
+/// is authenticated only over the named pipe - which accepts connections from the current Windows
+/// user alone, so there <see cref="HostUser"/> is guaranteed rather than asserted. Over a TCP
+/// connection (<see cref="Transport"/> <c>"tcp"</c>) there is no such guarantee: <see cref="HostUser"/>
+/// is still the <em>host process's</em> Windows user, but it says nothing about who connected - a
+/// loopback TCP socket accepts any local process running as any Windows user, and the capability
+/// token is the only gate. <see cref="ClientName"/> is whatever the connecting client claimed to be
+/// at handshake (<c>"scry"</c>, <c>"scry attach"</c>, a test's own name) - useful, but self-reported,
+/// and a hostile client could lie. There is deliberately no process-identity field: capturing one
+/// would need the first native interop in this assembly, which is a bigger cost than this warrants;
+/// the connection can be told apart from others by <see cref="ConnectionId"/> within one run (and,
+/// over TCP, by the ephemeral <see cref="PeerAddress"/>), but not attributed to a specific process.
 /// </para>
 ///
 /// <para>
@@ -46,6 +50,18 @@ public sealed record AuditRecord(
 
     /// <summary>Distinguishes concurrent connections within one run. Not stable across restarts.</summary>
     public int? ConnectionId { get; init; }
+
+    /// <summary><see cref="ScryTransports.Pipe"/> or <see cref="ScryTransports.Tcp"/>.</summary>
+    public string? Transport { get; init; }
+
+    /// <summary>
+    /// The connecting socket's ephemeral loopback address (<c>"127.0.0.1:54231"</c>-shaped), set
+    /// only when <see cref="Transport"/> is <see cref="ScryTransports.Tcp"/>. It distinguishes
+    /// concurrent TCP callers, the same way <see cref="ConnectionId"/> does - it is <em>not</em> a
+    /// process identity: mapping an ephemeral port back to a process needs the same native
+    /// interop (<c>GetExtendedTcpTable</c>) this project has deliberately declined elsewhere.
+    /// </summary>
+    public string? PeerAddress { get; init; }
 
     /// <summary>Self-asserted by the client at handshake. A label, not an authenticated identity.</summary>
     public string? ClientName { get; init; }
