@@ -10,8 +10,8 @@
 # Feasibility notes for whoever first sees this run:
 # - windows-latest ships Visual Studio 2022 with the MSVC v143 toolset and vswhere.exe, which is
 #   what native/Scry.Injector.Native/build.ps1 requires; build-native.ps1 should need nothing extra.
-# - The net472 legs need the in-box .NET Framework runtime, which windows-latest carries, plus the
-#   Microsoft.NETFramework.ReferenceAssemblies.net472 NuGet package this repo already references
+# - The net462 legs need the in-box .NET Framework runtime, which windows-latest carries, plus the
+#   Microsoft.NETFramework.ReferenceAssemblies.net462 NuGet package this repo already references
 #   for the targeting pack - no separate Framework SDK install should be required.
 # - The WPF and WinForms adapter suites create real dispatchers and forms. That is the part most
 #   likely to need adjustment on a runner with no interactive desktop session; if it fails here
@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: "8.0.x"
 
       - name: Run the full validation matrix
         shell: pwsh

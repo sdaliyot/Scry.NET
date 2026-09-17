@@ -15,7 +15,7 @@ namespace Scry.Injector.Payload;
 /// </para>
 /// <para>
 /// The adapter is loaded reflectively from the staged payload directory rather than referenced.
-/// Two reasons: this payload targets net9.0 while the modern adapters target net9.0-windows, and a
+/// Two reasons: this payload targets net8.0 while the modern adapters target net8.0-windows, and a
 /// hard reference would make every attach - including into a non-UI process - depend on the
 /// WindowsDesktop shared framework being present in the target. Loading on demand keeps non-UI
 /// attaches free of any desktop dependency.

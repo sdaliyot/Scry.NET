@@ -18,7 +18,7 @@ public static class InjectedEndpointEntryPoint
         return Start(argument);
     }
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
     [UnmanagedCallersOnly]
     public static int StartForCoreClr(nint argument, int argumentLength)
     {

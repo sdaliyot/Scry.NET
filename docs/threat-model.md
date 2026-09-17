@@ -31,8 +31,8 @@ it, and what does the target's own log say happened afterward."
 The boundary is the current Windows user for the named pipe - but not for the optional TCP
 listener, which has no such boundary at all. The two transports must be reasoned about separately:
 
-**The named pipe** is `PipeOptions.CurrentUserOnly` on .NET 9 and carries an explicit single-SID
-DACL on .NET Framework 4.7.2 (`RuntimeHost.CreatePipe`) - only processes running as the same
+**The named pipe** is `PipeOptions.CurrentUserOnly` on modern .NET and carries an explicit single-SID
+DACL on .NET Framework (`RuntimeHost.CreatePipe`) - only processes running as the same
 Windows user can even open the pipe. Within that boundary, Scry.NET adds one further gate (the
 capability token) and does not attempt a second one.
 

@@ -30,28 +30,60 @@ Target names and compatibility package versions are centralized in `Directory.Bu
 
 | Project | Target frameworks | Notes |
 |---|---|---|
-| `Scry.Contracts` | `net9.0`, `net472` | Identical protocol and descriptor shape |
-| `Scry.Runtime` | `net9.0`, `net472` | CoreCLR load contexts or desktop CLR default-AppDomain behavior |
-| `Scry.Endpoint` | `net9.0`, `net472` | In-process endpoint host |
-| `Scry.Client` | `net9.0`, `net472` | Client; no Roslyn, no runtime |
-| `Scry.SampleHost` | `net9.0`, `net472` | Non-UI embedded sample |
-| `Scry.Tests` | `net9.0`, `net472` | Runtime integration suite; CLI tests run on `net9.0` |
-| `Scry.Wpf` | `net9.0-windows`, `net472` | Optional WPF adapter; desktop CLR uses direct assembly references |
-| `Scry.WinForms` | `net9.0-windows`, `net472` | Optional Windows Forms adapter; desktop CLR uses direct assembly references |
-| `Scry.Wpf.Tests` | `net9.0-windows`, `net472` | STA dispatcher tests, both runtimes |
-| `Scry.WinForms.Tests` | `net9.0-windows`, `net472` | STA message-loop tests, both runtimes |
-| `Scry.Cli` | `net9.0` | Modern-only executable that interoperates with both host targets |
-| `Scry.Injector.Payload` | `net9.0`, `net472` | Calls the same `EndpointHost.Start` used by embedded mode |
-| `Scry.Injector` | `net9.0` | Must run with the same x86/x64 architecture as the target |
+| `Scry.Contracts` | `net8.0`, `net462` | Identical protocol and descriptor shape |
+| `Scry.Runtime` | `net8.0`, `net462` | CoreCLR load contexts or desktop CLR default-AppDomain behavior |
+| `Scry.Endpoint` | `net8.0`, `net462` | In-process endpoint host |
+| `Scry.Client` | `net8.0`, `net462` | Client; no Roslyn, no runtime |
+| `Scry.SampleHost` | `net8.0`, `net462` | Non-UI embedded sample |
+| `Scry.Tests` | `net8.0`, `net462` | Runtime integration suite; CLI tests run on `net8.0` |
+| `Scry.Wpf` | `net8.0-windows`, `net462` | Optional WPF adapter; desktop CLR uses direct assembly references |
+| `Scry.WinForms` | `net8.0-windows`, `net462` | Optional Windows Forms adapter; desktop CLR uses direct assembly references |
+| `Scry.Wpf.Tests` | `net8.0-windows`, `net462` | STA dispatcher tests, both runtimes |
+| `Scry.WinForms.Tests` | `net8.0-windows`, `net462` | STA message-loop tests, both runtimes |
+| `Scry.Cli` | `net8.0` | Modern-only executable that interoperates with both host targets |
+| `Scry.Injector.Payload` | `net8.0`, `net462` | Calls the same `EndpointHost.Start` used by embedded mode |
+| `Scry.Injector` | `net8.0` | Must run with the same x86/x64 architecture as the target |
 | `Scry.Injector.Native` | Win32 x86, x64 | Native DLL loaded into the target |
 
-The `Microsoft.NETFramework.ReferenceAssemblies.net472` package makes SDK-style net472 builds independent of machine-installed targeting packs. Runtime validation still requires Windows with .NET Framework 4.7.2 installed.
+The `Microsoft.NETFramework.ReferenceAssemblies.net462` package makes SDK-style net462 builds independent of machine-installed targeting packs. Runtime validation still requires Windows with .NET Framework 4.6.2 or later installed.
+
+### Target framework floors
+
+Both floors (`net8.0`, `net462`) are the lowest ones actually reachable today, not an arbitrary round
+number, and each is capped by a different constraint:
+
+- **.NET Framework is a single in-place CLR** - installing 4.8 replaces 4.7.2 on the same machine, so
+  there is no side-by-side story and no runtime cost to a lower floor; it only ever widens which
+  installed versions the payload can run under. `net462` is the actual floor: the pinned
+  `System.Text.Json`/`Microsoft.Bcl.AsyncInterfaces` packages both ship an explicit `net462`
+  dependency group (not `net472`), and a few call sites (`RuntimeInformation`,
+  `Enumerable.Append`/`ToHashSet`) needed a rewrite to inbox-since-1.1 equivalents because those
+  specific APIs were added to .NET Framework only in 4.7.1. `net462` also happens to be the last
+  version Microsoft still supports: `4.5.2`/`4.6`/`4.6.1` lost support in April 2022 (SHA-1
+  retirement), while `4.6.2`+ rides the Windows OS lifecycle and stays supported for as long as the
+  OS does.
+- **Modern .NET installs side by side per major version**, so the *target process* is already
+  running whichever one it started under - a `net9.0`-built payload simply cannot load into a .NET 8
+  process, which was the previous limitation. `net8.0` is the lowest floor that still loads into
+  `net8.0`/`net9.0`/`net10.0` hosts alike (each release's BCL stays a superset of the previous one for
+  lower-TFM-targeted code), and is capped there - not lower, e.g. `net6.0` - because the pinned Roslyn
+  scripting package (`Microsoft.CodeAnalysis.CSharp.Scripting`) only ships `netstandard2.0`/`net8.0`/
+  `net9.0` dependency groups; there is no `net6.0`/`net7.0` group to build against directly. One
+  nuance worth being explicit about: as of this writing both .NET 8 (LTS) and .NET 9 (STS) reach
+  end-of-support in the same month, November 2026 - that date is Microsoft's own patch-support window
+  for *that runtime version itself*, not a constraint on what Scry can target: a `net8.0`-built
+  payload keeps loading into whatever runtime the target process actually has, regardless of .NET 8's
+  own end-of-support date, for the same backward-compatible-superset reason above.
+
+Lowering either floor further than this would mean either dropping already-unsupported .NET Framework
+versions (little practical benefit) or downgrading the pinned Roslyn scripting package to reach
+`net6.0` (a much larger change, out of scope here).
 
 ## Protocol and security
 
 Frames are a 4-byte little-endian length followed by UTF-8 JSON. Protocol version 1 requires `handshake` first. The handshake authenticates a 256-bit random capability token, negotiates the version, creates or resumes a target-qualified session, and returns capabilities. Subsequent requests use structured success/error envelopes. Every handled request receives a target-generated `operationId`; a supplied `correlationId` is echoed, or defaults to that operation ID. Ordinary operation exceptions cross the boundary with type, message, stack, HResult, source, and recursively captured inner exceptions. Fatal runtime failures such as process termination, stack overflow, corrupted state, or fail-fast can bypass this boundary.
 
-Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` - or under `RuntimeHostOptions.TargetsDirectory` / `EndpointOptions.TargetsDirectory` / `scry attach --targets-dir`, when overridden - and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. On .NET 9 the named pipe uses `PipeOptions.CurrentUserOnly`. On .NET Framework 4.7.2 the server creates a protected, non-inheriting DACL with an allow rule only for the current Windows user SID; it does not fall back to a broadly accessible pipe. Descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
+Discovery descriptors live under `%LOCALAPPDATA%\Scry\targets` - or under `RuntimeHostOptions.TargetsDirectory` / `EndpointOptions.TargetsDirectory` / `scry attach --targets-dir`, when overridden - and are removed on host disposal and normal process exit. Any number of embedded hosts may publish simultaneously, including multiple processes with the same alias. Resolution accepts a target ID, canonical alias, or additional alias; an ambiguous alias is rejected and callers must select a target ID. On modern .NET the named pipe uses `PipeOptions.CurrentUserOnly`. On .NET Framework the server creates a protected, non-inheriting DACL with an allow rule only for the current Windows user SID; it does not fall back to a broadly accessible pipe. Descriptors and tokens must never be copied to logs, command-line arguments, telemetry, or remote systems. The CLI accepts a descriptor **path** or target identity/alias and reads the token locally.
 
 An endpoint can additionally start a loopback-only TCP listener (`RuntimeHostOptions.TcpPort` / `EndpointOptions.TcpPort` / `scry attach --tcp-port`), off by default, so a caller can reach it through a port forward set up outside Scry.NET (see `README.md`, "Reaching an endpoint on another machine"). `ScryClient.ConnectOverTcpAsync` never runs implicitly - a descriptor advertising a TCP listener still connects over the pipe unless a caller opts in explicitly. The pipe's per-user DACL has no TCP equivalent: enabling the listener means any local process, as any Windows user, can attempt a handshake, with the capability token as the only remaining gate. See `docs/threat-model.md` for the full trust-boundary discussion this requires.
 
@@ -198,7 +230,7 @@ Attach uses a strict inspect-before-write sequence:
 3. Refuse architecture mismatch, ARM64, no CLR, mixed CLR families, access denial, a missing payload/helper, or an existing live Scry descriptor.
 4. Allocate a DLL path in the target, start `LoadLibraryW`, locate the injected module, and call its exported bootstrap on a second remote thread.
 5. For .NET Framework, the shim obtains the already-loaded CLR v4 through `ICLRMetaHost`/`ICLRRuntimeInfo`, verifies it is loaded, and calls `ICLRRuntimeHost::ExecuteInDefaultAppDomain`.
-6. For .NET 9, the shim obtains a hostfxr runtime delegate compatible with the already-running CoreCLR and calls the payload's `UnmanagedCallersOnly` entry point. It does not call `coreclr_initialize` and does not create a second runtime.
+6. For modern .NET, the shim obtains a hostfxr runtime delegate compatible with the already-running CoreCLR and calls the payload's `UnmanagedCallersOnly` entry point. It does not call `coreclr_initialize` and does not create a second runtime.
 7. `Scry.Injector.Payload` calls and retains `EndpointHost.Start`; runtime, discovery, transport, authentication, capabilities, and behavior therefore remain identical to embedded mode.
 
 Native work is deliberately kept out of `DllMain`; `DllMain` only records the module handle and exported bootstrap work runs on the injector-created thread. The injector bounds all copied strings, waits with finite timeouts, releases remote allocations and handles, and maps Win32/bootstrap failures to stable codes including `permission_denied`, `loader_failed`, `security_software_interference`, and `bootstrap_failed`.
@@ -229,7 +261,7 @@ payload and adapters are architecture-neutral and are staged into the publish di
 both native helpers:
 
 ```powershell
-dotnet publish srcScry.Injector -c Release -f net9.0 -r win-x86 --self-contained false -o <dir>
+dotnet publish srcScry.Injector -c Release -f net8.0 -r win-x86 --self-contained false -o <dir>
 ```
 
 It is framework-dependent, so the x86 .NET runtime must be installed. Attaching with a mismatched
@@ -276,7 +308,7 @@ scry attach <pid|process-name> --adapters wpf
 knowing. The adapter needs no cooperation from the target: `UseWpf(Application)` enumerates
 `Application.Windows` when no roots are registered, and reuses the dispatcher the target already
 has rather than creating one. And the load is reflective rather than a project reference, both
-because the payload targets `net9.0` while the modern adapters target `net9.0-windows`, and because
+because the payload targets `net8.0` while the modern adapters target `net8.0-windows`, and because
 a hard reference would make every attach - including into a non-UI process - depend on the
 WindowsDesktop shared framework being present in the target.
 
@@ -304,7 +336,7 @@ Current limits:
   (`InteractiveAssemblyLoader.RegisterDependency`), and its own copy of a same-named assembly is
   preferred over the default context's. `loadContext` is rejected outright on .NET Framework, which
   has no load contexts at all.
-- Supported targets are .NET Framework 4.7.2 (or later 4.x) and .NET 9 on Windows x86/x64, both verified end to end on both CLR families.
+- Supported targets are .NET Framework 4.6.2 (or later 4.x) and .NET 8 (or later) on Windows x86/x64, both verified end to end on both CLR families.
 - ARM64, cross-architecture injection, and production packaging are not implemented. Reaching an
   endpoint on another machine is supported through an operator-established loopback TCP listener
   and port forward (`--tcp-port`), not through remote injection - see README.md, "Reaching an
@@ -421,7 +453,7 @@ Context.Log("message", "information")
 
 Registered root factories are evaluated once at the start of each execution. `Resolve` enforces the current target/session handle scope. Logs are bounded by entry count and message length and report dropped entries. Compilation failures use the normal failure envelope with code `compilation_failed` and structured diagnostics containing ID, severity, message, and one-based source spans. Exceptions thrown by compiled code use the ordinary recursive exception envelope: `InnerException` is followed to a depth of `ExceptionDetail.MaximumDepth` (8), past which a node reports `Truncated: true` rather than continuing, and message/stack-trace text is capped independently, so an unusually deep or verbose exception is reported in bounded form rather than risking the JSON depth limit or frame size cap and failing to serialize at all. An `AggregateException` reports every one of its faults (also capped at 8, with the count of any dropped) in `InnerExceptions`, and `InnerException` still holds the first fault for a caller that only looks there.
 
-Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context, the injected agent's host context, or the .NET Framework default AppDomain. Dynamic, native, and unreadable modules are skipped. On .NET 9, unrelated non-default-context modules are skipped because Roslyn cannot safely bind script code to an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
+Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context, the injected agent's host context, or the .NET Framework default AppDomain. Dynamic, native, and unreadable modules are skipped. On modern .NET, unrelated non-default-context modules are skipped unless the request's `loadContext` names that context - otherwise Roslyn could bind script code to the wrong copy of an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
 
 Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code - or a marshalled submission that never observes cancellation while holding the host's UI thread - cannot be forcibly stopped inside the target process. Scry does not claim process isolation or hard timeouts.
 
@@ -483,8 +515,8 @@ waiting for the dispatcher.
 
 `load-assembly` requires an absolute path. Loading differs by runtime:
 
-- On .NET 9, `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains isolated contexts for the host lifetime; there is no unload operation in this release. Isolated assemblies are available to list/find/describe operations, and to `evaluate`/`execute` once the request's `loadContext` names that context - otherwise they are excluded from Roslyn references, since referencing them without explicitly opting in would risk resolving to the wrong copy of a same-named type.
-- On .NET Framework 4.7.2, only `AppDomain.CurrentDomain` is supported. `default` uses `Assembly.LoadFrom` in that AppDomain, and descriptions report `DefaultAppDomain`. `isolated` fails with `load_policy_not_supported`: a child AppDomain cannot preserve Scry's in-process roots, handles, reflection objects, and Roslyn type identity.
+- On modern .NET, `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains isolated contexts for the host lifetime; there is no unload operation in this release. Isolated assemblies are available to list/find/describe operations, and to `evaluate`/`execute` once the request's `loadContext` names that context - otherwise they are excluded from Roslyn references, since referencing them without explicitly opting in would risk resolving to the wrong copy of a same-named type.
+- On .NET Framework, only `AppDomain.CurrentDomain` is supported. `default` uses `Assembly.LoadFrom` in that AppDomain, and descriptions report `DefaultAppDomain`. `isolated` fails with `load_policy_not_supported`: a child AppDomain cannot preserve Scry's in-process roots, handles, reflection objects, and Roslyn type identity.
 
 Loading is explicit: evaluation never loads assemblies by path or probes arbitrary directories. `list-assemblies` reports identity, location, dynamic status, load context, default-context status, and collectibility. `find-types` performs bounded filtering over loaded types and reports each type's load context. `describe-type` returns bounded member metadata; `assembly` and `loadContext` selectors disambiguate duplicate full type names across assemblies or contexts. `evaluate`/`execute` accept their own `loadContext` on the execution request (distinct from `describe-type`'s selector, though it is the same context name) to widen which context's assemblies can be named in `references`.
 
@@ -545,15 +577,15 @@ Run the modern and desktop CLR suites explicitly:
 ```powershell
 .\build-native.ps1
 dotnet build Scry.sln -c Release
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net9.0 --no-build
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
-dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
-dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net8.0 --no-build
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 --artifacts-path artifacts\net462-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 --artifacts-path artifacts\net462-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462
+dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net462
 dotnet format Scry.sln --verify-no-changes --no-restore
 ```
 
-The net472 suite executes an embedded endpoint on the installed desktop CLR and covers framing (including partial and truncated reads), discovery, current-user pipe ACLs, capability authentication, sessions and handles, reflection, exception projection, limits, Roslyn evaluate/execute, assembly discovery/loading, and the unsupported isolated-policy response. The architecture-specific runs assert that the test host is actually x64 or x86.
+The net462 suite executes an embedded endpoint on the installed desktop CLR and covers framing (including partial and truncated reads), discovery, current-user pipe ACLs, capability authentication, sessions and handles, reflection, exception projection, limits, Roslyn evaluate/execute, assembly discovery/loading, and the unsupported isolated-policy response. The architecture-specific runs assert that the test host is actually x64 or x86.
 
 ## Extensibility boundaries
 

@@ -144,8 +144,8 @@ public sealed class ClientWatchdogTests
     /// TCP. Worth its own test because a socket receive that has already started ignores
     /// cancellation on <em>both</em> frameworks - unlike the named pipe, where that is a .NET
     /// Framework-only quirk. See the "Racing a delay" remark on
-    /// <c>ScryClient.WithDeadlineAsync</c>, which used to describe this as net472-only before this
-    /// test existed to disprove that on net9.0 too.
+    /// <c>ScryClient.WithDeadlineAsync</c>, which used to describe this as .NET-Framework-only before
+    /// this test existed to disprove that on modern .NET too.
     /// </summary>
     [Fact]
     public async Task A_wedged_target_over_tcp_fails_the_request_instead_of_hanging()

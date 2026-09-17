@@ -143,8 +143,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
                 process.StartTime.ToUniversalTime())
             {
+                // Concat a single-element array rather than Enumerable.Append, which is not inbox
+                // on this project's net462 floor (added to .NET Framework only in 4.7.1).
                 Aliases = options.Aliases
-                    .Append(options.Alias)
+                    .Concat([options.Alias])
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
                     .ToArray(),

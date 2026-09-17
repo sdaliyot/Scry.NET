@@ -449,7 +449,7 @@ internal static class NativeBootstrap
             _ => InjectionErrorCode.BootstrapFailed
         };
         // Assigned unconditionally rather than patched in place, so it is non-null on every
-        // path without depending on nullable annotations the net472 reference assemblies lack.
+        // path without depending on nullable annotations the net462 reference assemblies lack.
         var message = string.IsNullOrWhiteSpace(status?.Message)
             ? $"The native bootstrap failed with status 0x{result:x8}."
             : status!.Message;

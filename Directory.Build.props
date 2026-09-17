@@ -5,9 +5,26 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <ScryModernTargetFramework>net9.0</ScryModernTargetFramework>
-    <ScryModernWindowsTargetFramework>net9.0-windows</ScryModernWindowsTargetFramework>
-    <ScryNetFrameworkTarget>net472</ScryNetFrameworkTarget>
+    <!--
+      Both floors are chosen to be the lowest one actually reachable, not an arbitrary round number -
+      see "Target framework floors" in docs/development.md for the full reasoning. Short version:
+      .NET Framework is a single in-place CLR (installing 4.8 replaces 4.7.2 on the same machine), so a
+      lower floor here only ever widens which installed versions the payload can run under, never
+      narrows it. net462 is the actual floor: it is the lowest .NET Framework the pinned
+      System.Text.Json/Microsoft.Bcl.AsyncInterfaces packages support, and it is also the last version
+      Microsoft still supports (4.5.2/4.6/4.6.1 lost support in April 2022; 4.6.2+ rides the Windows OS
+      lifecycle).
+    -->
+    <ScryNetFrameworkTarget>net462</ScryNetFrameworkTarget>
+    <!--
+      Modern .NET installs side by side per major version, so the target *process* is already running
+      whichever one it started under - a net9.0-built payload simply cannot load into a .NET 8 process.
+      net8.0 is the lowest floor that still loads into net8.0/net9.0/net10.0 hosts alike, and is capped
+      here (not lower, e.g. net6.0) because the pinned Roslyn scripting package only ships netstandard2.0/
+      net8.0/net9.0 dependency groups - there is no net6.0/net7.0 group to build against directly.
+    -->
+    <ScryModernTargetFramework>net8.0</ScryModernTargetFramework>
+    <ScryModernWindowsTargetFramework>net8.0-windows</ScryModernWindowsTargetFramework>
     <ScryLibraryTargetFrameworks>$(ScryModernTargetFramework);$(ScryNetFrameworkTarget)</ScryLibraryTargetFrameworks>
     <ScryDesktopTargetFrameworks>$(ScryModernWindowsTargetFramework);$(ScryNetFrameworkTarget)</ScryDesktopTargetFrameworks>
     <SystemTextJsonVersion>9.0.11</SystemTextJsonVersion>
@@ -28,7 +45,7 @@
   <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
     <Compile Include="$(MSBuildThisFileDirectory)src\Shared\NetFrameworkCompatibility.cs"
              Link="Compatibility\NetFrameworkCompatibility.cs" />
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472"
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net462"
                       Version="$(NetFrameworkReferenceAssembliesVersion)"
                       PrivateAssets="all" />
   </ItemGroup>

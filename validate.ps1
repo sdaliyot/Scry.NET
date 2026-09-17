@@ -46,30 +46,30 @@ try {
         dotnet build Scry.sln -c Release -p:RequireNativeInjector=true --nologo
     }
 
-    Invoke-Step "dotnet test (net9.0)" {
-        dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net9.0 --no-build --nologo
+    Invoke-Step "dotnet test (net8.0)" {
+        dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net8.0 --no-build --nologo
     }
 
-    Invoke-Step "dotnet test (net472, x64)" {
-        dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 `
-            --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 --nologo `
+    Invoke-Step "dotnet test (net462, x64)" {
+        dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 `
+            --artifacts-path artifacts\net462-x64 -p:PlatformTarget=x64 --nologo `
             -- RunConfiguration.TargetPlatform=x64
     }
 
     if (-not $Quick) {
-        Invoke-Step "dotnet test (net472, x86)" {
-            dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 `
-                --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 --nologo `
+        Invoke-Step "dotnet test (net462, x86)" {
+            dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 `
+                --artifacts-path artifacts\net462-x86 -p:PlatformTarget=x86 --nologo `
                 -- RunConfiguration.TargetPlatform=x86
         }
     }
 
-    Invoke-Step "dotnet test Scry.Wpf.Tests (net472)" {
-        dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472 --nologo
+    Invoke-Step "dotnet test Scry.Wpf.Tests (net462)" {
+        dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462 --nologo
     }
 
-    Invoke-Step "dotnet test Scry.WinForms.Tests (net472)" {
-        dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472 --nologo
+    Invoke-Step "dotnet test Scry.WinForms.Tests (net462)" {
+        dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net462 --nologo
     }
 
     Invoke-Step "dotnet format --verify-no-changes" {

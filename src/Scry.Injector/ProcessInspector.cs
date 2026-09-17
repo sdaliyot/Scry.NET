@@ -19,9 +19,11 @@ public static class ProcessInspector
     public static ProcessInspectionResult Inspect(int processId)
     {
 #if NETFRAMEWORK
-        // OperatingSystem.IsWindows is .NET 5+. RuntimeInformation is inbox from 4.7.1 and says
-        // the same thing; the modern branch keeps the form the platform analyzer understands.
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        // OperatingSystem.IsWindows is .NET 5+, and RuntimeInformation (which says the same thing)
+        // is inbox only from 4.7.1 - one minor version above this project's net462 floor.
+        // Environment.OSVersion has been inbox since .NET Framework 1.1, and .NET Framework itself
+        // never runs anywhere but Windows NT, so this is exactly as reliable here.
+        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
 #else
         if (!OperatingSystem.IsWindows())
 #endif
@@ -62,10 +64,11 @@ public static class ProcessInspector
 
     public static TargetRuntimeFamily ClassifyRuntime(IEnumerable<string> moduleNames)
     {
-        var modules = moduleNames
-            .Select(Path.GetFileName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Built via the constructor rather than Enumerable.ToHashSet, which is not inbox on this
+        // project's net462 floor (added to .NET Framework only in 4.7.1).
+        var modules = new HashSet<string?>(
+            moduleNames.Select(Path.GetFileName).Where(name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
         var hasDesktopClr = modules.Contains("clr.dll");
         var hasCoreClr = modules.Contains("coreclr.dll");
 
@@ -86,6 +89,12 @@ public static class ProcessInspector
     }
 
     public static TargetArchitecture CurrentArchitecture =>
+#if NETFRAMEWORK
+        // RuntimeInformation.ProcessArchitecture is not inbox on this project's net462 floor
+        // (added to .NET Framework only in 4.7.1). .NET Framework never runs as ARM64 - "no ARM64"
+        // is already a stated product-wide limitation - so bitness alone disambiguates x86/x64.
+        Environment.Is64BitProcess ? TargetArchitecture.X64 : TargetArchitecture.X86;
+#else
         RuntimeInformation.ProcessArchitecture switch
         {
             Architecture.X86 => TargetArchitecture.X86,
@@ -94,6 +103,7 @@ public static class ProcessInspector
                 InjectionErrorCode.UnsupportedArchitecture,
                 $"Injector architecture '{RuntimeInformation.ProcessArchitecture}' is not supported.")
         };
+#endif
 
     public static void EnsureCompatibleArchitecture(
         TargetArchitecture injector,
@@ -106,7 +116,7 @@ public static class ProcessInspector
                 $"The {injector.ToString().ToLowerInvariant()} injector cannot attach to an " +
                 $"{target.ToString().ToLowerInvariant()} target. Injection writes into the target with " +
                 "the loader addresses of its own bitness, so the injector process must match. " +
-                $"Publish one with: dotnet publish src/Scry.Injector -c Release -f net9.0 " +
+                $"Publish one with: dotnet publish src/Scry.Injector -c Release -f net8.0 " +
                 $"-r win-{target.ToString().ToLowerInvariant()} --self-contained false -o <dir>");
         }
     }

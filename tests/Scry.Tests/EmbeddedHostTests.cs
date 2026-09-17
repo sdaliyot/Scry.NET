@@ -860,7 +860,7 @@ public sealed class EmbeddedHostTests
         Assert.True((await next.RequestAsync("capabilities")).Success);
     }
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
     [Fact]
     public async Task Cli_connects_by_descriptor_without_exposing_the_token()
     {

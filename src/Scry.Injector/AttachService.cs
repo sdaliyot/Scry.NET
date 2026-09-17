@@ -195,10 +195,10 @@ public static class AttachService
         // Attach mode is Windows-only end to end (ProcessInspector.Inspect refuses elsewhere), but
         // only this call chain touches APIs the platform-compatibility analyzer marks Windows-only,
         // so the guard is local rather than annotating the whole method. Same two-branch form as
-        // ProcessInspector.Inspect, for the same reason: OperatingSystem.IsWindows is .NET 5+.
+        // ProcessInspector.Inspect, for the same reason: OperatingSystem.IsWindows is .NET 5+, and
+        // RuntimeInformation is not inbox on this project's net462 floor (only from 4.7.1).
 #if NETFRAMEWORK
-        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.Windows))
+        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
 #else
         if (!OperatingSystem.IsWindows())
 #endif

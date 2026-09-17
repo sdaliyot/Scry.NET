@@ -122,7 +122,7 @@ internal sealed class AuditLog : IAsyncDisposable
         try
         {
             // Scry.NET is Windows-only end to end (named pipes, PipeSecurity/DACLs elsewhere in
-            // this class), but targets plain net9.0 rather than net9.0-windows, so the platform
+            // this class), but targets plain net8.0 rather than net8.0-windows, so the platform
             // analyzer sees this as reachable from an unconstrained TFM. It is not.
 #pragma warning disable CA1416
             return WindowsIdentity.GetCurrent().Name;

@@ -134,7 +134,7 @@ public sealed class JobAndScenarioTests
             wait.Result!.Value.GetProperty("job").GetProperty("state").GetString());
     }
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
     [Fact]
     public async Task Cli_orchestrates_two_sample_processes_and_preserves_partial_failures()
     {
@@ -261,7 +261,7 @@ public sealed class JobAndScenarioTests
     }
 #endif
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -367,7 +367,7 @@ public sealed class JobAndScenarioTests
         public ValueTask DisposeAsync() => Host.DisposeAsync();
     }
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
     private sealed class SampleProcess : IAsyncDisposable
     {
         private readonly Process _process;

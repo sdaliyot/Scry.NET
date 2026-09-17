@@ -69,7 +69,7 @@ public sealed class TargetsDirectoryTests
     {
         // A free port, reserved by binding and releasing it, so the assertion below (rebinding the
         // exact same port) is not a flake against an unrelated process. TcpListener is not
-        // IDisposable on net472, so Stop() is called explicitly rather than via `using`.
+        // IDisposable on net462, so Stop() is called explicitly rather than via `using`.
         var probe = new TcpListener(IPAddress.Loopback, 0);
         probe.Start();
         var port = ((IPEndPoint)probe.LocalEndpoint).Port;

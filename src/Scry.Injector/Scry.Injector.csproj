@@ -7,7 +7,7 @@
 
   <PropertyGroup>
     <!--
-      Only the modern leg is a tool. The .NET Framework leg exists so a net472 test project
+      Only the modern leg is a tool. The .NET Framework leg exists so a net462 test project
       can reference AttachService directly, and it would have no way to attach on its own
       anyway: the payload and native helper are staged by the modern leg's build. Shipping
       it as a library also gives consumers a .dll to reference rather than an .exe.
@@ -17,8 +17,10 @@
     <!--
       Multi-targeted so a .NET Framework test project can attach with typed calls instead of
       shelling out to the CLI. Nothing here needs a modern BCL: nint/nuint are C# language
-      aliases for IntPtr/UIntPtr, and SafeProcessHandle, RuntimeInformation.ProcessArchitecture
-      and XDocument all exist on net472.
+      aliases for IntPtr/UIntPtr, and SafeProcessHandle and XDocument both exist on net462.
+      RuntimeInformation.ProcessArchitecture does not (inbox only from 4.7.1) - ProcessInspector
+      uses Environment.Is64BitProcess/Environment.OSVersion instead on this leg for exactly that
+      reason.
     -->
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
     <AssemblyName>scry-injector</AssemblyName>
@@ -38,9 +40,9 @@
   <!--
     Staged payload directory names are deliberately NOT target framework monikers. The runtime
     consumer is AttachService.ResolveComponents, which picks a directory from the target's
-    detected CLR family rather than from a TFM - so retargeting the .NET Framework leg (net48
-    to net472 already happened once) must not require a C# change. Keep in sync with
-    ScryPayloadLayout in AttachService.cs.
+    detected CLR family rather than from a TFM - so retargeting the .NET Framework leg (net48 to
+    net472, then net472 to net462, have both already happened) must not require a C# change. Keep
+    in sync with ScryPayloadLayout in AttachService.cs.
   -->
   <PropertyGroup>
     <ScryModernPayloadDirectory>net</ScryModernPayloadDirectory>
@@ -70,7 +72,7 @@
     <!--
       Stage the optional desktop adapters beside each payload so an attach that requests one
       can load it on demand. They are loaded reflectively rather than referenced: the payload
-      targets net9.0 while the modern adapters target net9.0-windows, and a hard reference would
+      targets net8.0 while the modern adapters target net8.0-windows, and a hard reference would
       make every attach - including into a non-UI process - depend on the WindowsDesktop shared
       framework being present in the target.
     -->

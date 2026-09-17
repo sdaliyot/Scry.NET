@@ -1,4 +1,4 @@
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
 using System.Diagnostics;
 using System.Text.Json;
 using Scry.Injector;
@@ -23,7 +23,7 @@ public sealed class AttachIntegrationTests
             "Scry.AttachTarget",
             "bin",
             "Release",
-            "net9.0",
+            "net8.0",
             "Scry.AttachTarget.dll");
         var cliAssembly = Path.Combine(
             root,
@@ -31,7 +31,7 @@ public sealed class AttachIntegrationTests
             "Scry.Cli",
             "bin",
             "Release",
-            "net9.0",
+            "net8.0",
             "scry.dll");
         Assert.True(File.Exists(targetAssembly), $"Attach target is missing: {targetAssembly}");
         Assert.True(
@@ -114,8 +114,8 @@ public sealed class AttachIntegrationTests
 
         var root = FindRepositoryRoot();
         var targetAssembly = Path.Combine(
-            root, "samples", "Scry.AttachTarget", "bin", "Release", "net9.0", "Scry.AttachTarget.dll");
-        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+            root, "samples", "Scry.AttachTarget", "bin", "Release", "net8.0", "Scry.AttachTarget.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net8.0", "scry.dll");
         Assert.True(File.Exists(targetAssembly), $"Attach target is missing: {targetAssembly}");
         Assert.True(
             File.Exists(Path.Combine(
@@ -190,8 +190,8 @@ public sealed class AttachIntegrationTests
 
         var root = FindRepositoryRoot();
         var targetAssembly = Path.Combine(
-            root, "samples", "Scry.AttachTarget", "bin", "Release", "net9.0", "Scry.AttachTarget.dll");
-        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+            root, "samples", "Scry.AttachTarget", "bin", "Release", "net8.0", "Scry.AttachTarget.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net8.0", "scry.dll");
         Assert.True(File.Exists(targetAssembly), $"Attach target is missing: {targetAssembly}");
         Assert.True(
             File.Exists(Path.Combine(
@@ -250,7 +250,7 @@ public sealed class AttachIntegrationTests
     }
 
     /// <summary>
-    /// The acceptance test for attach mode: a .NET Framework 4.7.2 WPF process that does not
+    /// The acceptance test for attach mode: a .NET Framework WPF process that does not
     /// reference Scry at all, inspected and driven from outside. Covers the three things that make
     /// attach mode worth having, and that the modern-.NET console test above cannot show:
     /// the desktop adapter gets wired inside the target by --adapters, the WPF logical tree is
@@ -272,9 +272,9 @@ public sealed class AttachIntegrationTests
             "Scry.AttachWpfTarget",
             "bin",
             "Release",
-            "net472",
+            "net462",
             "Scry.AttachWpfTarget.exe");
-        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net8.0", "scry.dll");
         Assert.True(File.Exists(targetExecutable), $"Attach target is missing: {targetExecutable}");
         Assert.True(
             File.Exists(Path.Combine(
@@ -436,9 +436,9 @@ public sealed class AttachIntegrationTests
 
         var root = FindRepositoryRoot();
         var targetExe = Path.Combine(
-            root, "samples", "Scry.MultiDomainAttachTarget", "bin", "Release", "net472",
+            root, "samples", "Scry.MultiDomainAttachTarget", "bin", "Release", "net462",
             "Scry.MultiDomainAttachTarget.exe");
-        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net8.0", "scry.dll");
         Assert.True(File.Exists(targetExe), $"Multi-domain attach target is missing: {targetExe}");
         Assert.True(
             File.Exists(Path.Combine(
@@ -540,9 +540,9 @@ public sealed class AttachIntegrationTests
 
         var root = FindRepositoryRoot();
         var targetExe = Path.Combine(
-            root, "samples", "Scry.MultiDomainAttachTarget", "bin", "Release", "net472",
+            root, "samples", "Scry.MultiDomainAttachTarget", "bin", "Release", "net462",
             "Scry.MultiDomainAttachTarget.exe");
-        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net8.0", "scry.dll");
         Assert.True(File.Exists(targetExe), $"Multi-domain attach target is missing: {targetExe}");
 
         using var process = Process.Start(new ProcessStartInfo

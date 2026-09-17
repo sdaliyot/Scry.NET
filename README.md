@@ -28,7 +28,9 @@ listener reachable through a port forward, so the same flow spans the desktop cl
 server component on the box where it actually runs. See
 [reaching an endpoint on another machine](#reaching-an-endpoint-on-another-machine).
 
-It works on .NET 9 and .NET Framework 4.7.2, on Windows, x86 and x64.
+It works on .NET 8+ and .NET Framework 4.6.2+, on Windows, x86 and x64. See
+["Target framework floors"](docs/development.md#target-framework-floors) for why these are the
+lowest versions actually supported, not an arbitrary round number.
 
 ## Two ways to get an endpoint into a process
 
@@ -247,7 +249,7 @@ references the same two assemblies the CLI is built from: `Scry.Injector` for
 | `Scry.Client` | tool | The connecting client: opens the pipe, performs the handshake, and sends requests. References only `Scry.Contracts`. |
 | `Scry.Injector` | tool | Inspects the target's architecture and CLR, refuses unsafe or ambiguous cases, and performs the injection. |
 | `Scry.Cli` (`scry`) | tool | The stateless JSON command line, and the interface agents use. |
-| `Scry.Injector.Native` | target | Native DLL injected into the target, where it starts the CLR - `ExecuteInDefaultAppDomain` on .NET Framework, `hostfxr` on .NET 9 - and calls the payload. The injector also maps a local copy, but only to compute the export offset before rebasing it into the remote module; it executes only in the target. |
+| `Scry.Injector.Native` | target | Native DLL injected into the target, where it starts the CLR - `ExecuteInDefaultAppDomain` on .NET Framework, `hostfxr` on modern .NET - and calls the payload. The injector also maps a local copy, but only to compute the export offset before rebasing it into the remote module; it executes only in the target. |
 
 `Scry.Client` depending on `Scry.Contracts` alone is deliberate. `Scry.Runtime` is the sole carrier
 of `Microsoft.CodeAnalysis.CSharp.Scripting`, so keeping the client off it is what lets a test
@@ -255,10 +257,10 @@ project reference Scry.NET without pulling roughly ten megabytes of compiler int
 
 | Component | Supported targets |
 |---|---|
-| `Scry.Contracts`, `Scry.Runtime`, `Scry.Endpoint`, `Scry.Client` | .NET 9 and .NET Framework 4.7.2 |
-| `Scry.Wpf`, `Scry.WinForms` | .NET 9 (Windows) and .NET Framework 4.7.2 |
-| `Scry.Cli` | .NET 9 only; it connects to either runtime |
-| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on .NET 9 or .NET Framework 4.7.2 and attaches to x86 or x64 processes on either runtime. Both architectures are verified end to end, each with its own architecture-matched injector. |
+| `Scry.Contracts`, `Scry.Runtime`, `Scry.Endpoint`, `Scry.Client` | .NET 8+ and .NET Framework 4.6.2+ |
+| `Scry.Wpf`, `Scry.WinForms` | .NET 8+ (Windows) and .NET Framework 4.6.2+ |
+| `Scry.Cli` | Modern .NET only (built against .NET 8); it connects to either runtime |
+| `Scry.Injector`, `Scry.Injector.Payload`, native bootstrap | The injector runs on modern .NET or .NET Framework and attaches to x86 or x64 processes on either runtime. Both architectures are verified end to end, each with its own architecture-matched injector. |
 
 ## Attaching to a process that does not reference Scry
 
@@ -464,12 +466,12 @@ cooperating.
 
 | Sample | Process type | Shows |
 |---|---|---|
-| `samples\Scry.SampleHost` | Console, .NET 9 and 4.7.2 | Set/inspect a counter, run a recalculation job |
-| `samples\Scry.SampleWorker` | Long-running worker, .NET 9 | Change queue mode, inspect heartbeats, drain work as a job |
-| `samples\Scry.SampleWpf` | WPF, .NET 9 | Update dispatcher-owned editor state, assert projected UI, load as a job |
-| `samples\Scry.SampleWinForms` | WinForms, .NET 9 | Update owner-thread order state, assert controls, import as a job |
-| `samples\Scry.AttachTarget` | Console, .NET 9 and 4.7.2 | An attach victim with no Scry reference; prints its pid and waits |
-| `samples\Scry.AttachWpfTarget` | WPF, .NET Framework 4.7.2 | An uncooperative WPF app with no Scry reference, for `--adapters wpf` |
+| `samples\Scry.SampleHost` | Console, .NET 8 and 4.6.2 | Set/inspect a counter, run a recalculation job |
+| `samples\Scry.SampleWorker` | Long-running worker, .NET 8 | Change queue mode, inspect heartbeats, drain work as a job |
+| `samples\Scry.SampleWpf` | WPF, .NET 8 | Update dispatcher-owned editor state, assert projected UI, load as a job |
+| `samples\Scry.SampleWinForms` | WinForms, .NET 8 | Update owner-thread order state, assert controls, import as a job |
+| `samples\Scry.AttachTarget` | Console, .NET 8 and 4.6.2 | An attach victim with no Scry reference; prints its pid and waits |
+| `samples\Scry.AttachWpfTarget` | WPF, .NET Framework 4.6.2 | An uncooperative WPF app with no Scry reference, for `--adapters wpf` |
 
 The embedded samples print `Target` and `Descriptor` on startup and exit cleanly when Enter is sent.
 See the development guide for complete adoption and validation flows.
@@ -659,13 +661,13 @@ against. The summary:
 
 Scry.NET permits deliberate code execution and state mutation inside the target. It is **tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently.
 
-**By default every endpoint is local-only, and that default is enforced by the operating system.** Pipe names and tokens are random, and capability tokens are stored only in the current user's rendezvous directory. .NET 9 uses `PipeOptions.CurrentUserOnly`; .NET Framework 4.7.2 creates a protected pipe DACL granting only the current Windows SID - so Windows refuses the pipe to any other user before a byte is read, independently of the token.
+**By default every endpoint is local-only, and that default is enforced by the operating system.** Pipe names and tokens are random, and capability tokens are stored only in the current user's rendezvous directory. Modern .NET uses `PipeOptions.CurrentUserOnly`; .NET Framework creates a protected pipe DACL granting only the current Windows SID - so Windows refuses the pipe to any other user before a byte is read, independently of the token.
 
 **Opting into a TCP listener changes that boundary, and only you can opt in.** `TcpPort` is `null` unless set, and it binds loopback only - never a routable address - so the endpoint is still unreachable from another machine without a port forward that you establish. But a loopback socket has no `CurrentUserOnly` equivalent and no DACL: once enabled, any local process running as any Windows user can attempt a handshake, and the 256-bit capability token becomes the only gate. Reaching such an endpoint across machines therefore means the token crosses machines inside the descriptor, which makes that file a bearer credential granting code-execution-equivalent access to the process for as long as the endpoint runs. Treat it accordingly, and delete it when you are done. Do not expose descriptors or bridge the protocol to untrusted clients, and prefer the pipe wherever the caller really is local.
 
 Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
 
-Current attach limits are: x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no ARM64, and no production packaging. Injection itself always lands in the target's default AppDomain, but on .NET Framework the endpoint can then be placed in - or a sibling started in - any other AppDomain of that same process (`--appdomain`, `appdomain.list`/`appdomain.start`; see "Reaching a chosen AppDomain" below). On modern .NET, inspection (`list-assemblies`, `find-types`, `describe-type`) already spans every `AssemblyLoadContext`; execution (`evaluate`/`execute`) binds the default context and the runtime's own by default, and can additionally bind a chosen context by naming it in the execution request's `loadContext` field (e.g. one created by `load-assembly --loadPolicy isolated`) - this widens the eligible reference set rather than replacing it, and is rejected on .NET Framework, which has no load contexts.
+Current attach limits are: x86 and x64 only, .NET Framework 4.6.2+ and .NET 8+ only, no ARM64, and no production packaging. Injection itself always lands in the target's default AppDomain, but on .NET Framework the endpoint can then be placed in - or a sibling started in - any other AppDomain of that same process (`--appdomain`, `appdomain.list`/`appdomain.start`; see "Reaching a chosen AppDomain" below). On modern .NET, inspection (`list-assemblies`, `find-types`, `describe-type`) already spans every `AssemblyLoadContext`; execution (`evaluate`/`execute`) binds the default context and the runtime's own by default, and can additionally bind a chosen context by naming it in the execution request's `loadContext` field (e.g. one created by `load-assembly --loadPolicy isolated`) - this widens the eligible reference set rather than replacing it, and is rejected on .NET Framework, which has no load contexts.
 
 ## Build and test
 
@@ -675,10 +677,10 @@ also what [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs. To run th
 ```powershell
 dotnet build Scry.sln
 dotnet test Scry.sln --no-build
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
-dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net472 --artifacts-path artifacts\net472-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
-dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net472
-dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net472
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 --artifacts-path artifacts\net462-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
+dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 --artifacts-path artifacts\net462-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462
+dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net462
 ```
 
 ## License

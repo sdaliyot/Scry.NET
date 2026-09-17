@@ -11,7 +11,7 @@ end of this file rather than five times over.
 | [`System.Text.Json`](https://github.com/dotnet/runtime) | 9.0.11 | `Scry.Contracts`, `Scry.Wpf`, `Scry.WinForms` - the wire protocol's JSON serialization on .NET Framework. |
 | [`Microsoft.Bcl.AsyncInterfaces`](https://github.com/dotnet/runtime) | 9.0.11 | Every project targeting .NET Framework - backfills `IAsyncEnumerable`/`IAsyncDisposable` support. |
 | [`System.Threading.Tasks.Extensions`](https://github.com/dotnet/runtime) | 4.5.4 | Every project targeting .NET Framework - backfills `ValueTask`/`ValueTask<T>`. |
-| [`Microsoft.NETFramework.ReferenceAssemblies.net472`](https://github.com/dotnet/sdk) | 1.0.3 | Every net472 build - makes SDK-style net472 builds reproducible without a machine-installed targeting pack; contributes no runtime code. |
+| [`Microsoft.NETFramework.ReferenceAssemblies.net462`](https://github.com/dotnet/sdk) | 1.0.3 | Every net462 build - makes SDK-style net462 builds reproducible without a machine-installed targeting pack; contributes no runtime code. |
 
 **What this list does not attempt to enumerate.** `Microsoft.CodeAnalysis.CSharp.Scripting` pulls
 in further Microsoft/.NET Foundation packages of its own (the rest of the Roslyn compiler platform,

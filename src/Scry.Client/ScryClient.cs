@@ -214,8 +214,8 @@ public sealed class ScryClient : IAsyncDisposable
         ScryEndpointAddress address,
         CancellationToken cancellationToken)
     {
-        // net472 has no cancellable Socket.ConnectAsync, so race BeginConnect/EndConnect against
-        // the deadline the same way the pipe path already handles the same TFM gap.
+        // .NET Framework has no cancellable Socket.ConnectAsync, so race BeginConnect/EndConnect
+        // against the deadline the same way the pipe path already handles the same TFM gap.
         var endpoint = new IPEndPoint(IPAddress.Parse(address.Host), address.Port);
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         socket.BeginConnect(endpoint, static asyncResult =>

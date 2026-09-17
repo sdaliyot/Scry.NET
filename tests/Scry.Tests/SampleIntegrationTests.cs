@@ -4,12 +4,12 @@ using Scry.Contracts;
 
 namespace Scry.Tests;
 
-// The whole suite drives the samples out-of-process through the scry CLI, which is net9.0
-// only, and two of the samples are net9.0-windows. It also relies on ProcessStartInfo.
-// ArgumentList, Process.WaitForExitAsync, Process.Kill(entireProcessTree) and
+// The whole suite drives the samples out-of-process through the scry CLI, which is
+// modern-.NET only, and two of the samples are modern-.NET-Windows only. It also relies on
+// ProcessStartInfo.ArgumentList, Process.WaitForExitAsync, Process.Kill(entireProcessTree) and
 // Task.WaitAsync, none of which exist on .NET Framework. Scope it to the modern leg, the
 // same way the other CLI-driving tests in this project are scoped.
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
 [Collection("Scry integration")]
 public sealed class SampleIntegrationTests
 {

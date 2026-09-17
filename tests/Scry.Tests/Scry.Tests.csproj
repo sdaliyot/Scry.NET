@@ -20,6 +20,12 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!--
+      Referenced explicitly (unlike most projects, where it's netfx-only) because
+      SampleIntegrationTests uses JsonElement.DeepEquals, which is not inbox on net8.0 - it was
+      added in .NET 9's System.Text.Json. The package's net8.0 assets bring it back.
+    -->
+    <PackageReference Include="System.Text.Json" Version="$(SystemTextJsonVersion)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,13 +38,13 @@
     <ProjectReference Include="..\..\src\Scry.Runtime\Scry.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Scry.Endpoint\Scry.Endpoint.csproj" />
     <ProjectReference Include="..\..\src\Scry.Client\Scry.Client.csproj" />
-    <!-- Multi-targeted, so both test legs reference it and the net472 leg is actually exercised. -->
+    <!-- Multi-targeted, so both test legs reference it and the net462 leg is actually exercised. -->
     <ProjectReference Include="..\..\src\Scry.Injector\Scry.Injector.csproj" />
     <ProjectReference Include="..\..\src\Scry.Cli\Scry.Cli.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
     <ProjectReference Include="..\..\samples\Scry.SampleHost\Scry.SampleHost.csproj" ReferenceOutputAssembly="false" />
-    <!-- Modern-TFM only: these samples are not multi-targeted, so a net472 leg cannot reference them. -->
+    <!-- Modern-TFM only: these samples are not multi-targeted, so a net462 leg cannot reference them. -->
     <ProjectReference Include="..\..\samples\Scry.SampleWorker\Scry.SampleWorker.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="'$(TargetFramework)' == '$(ScryModernTargetFramework)'" />
@@ -54,9 +60,9 @@
     the point of it is that it has no Scry reference at all.
 
     RemoveProperties="TargetFramework" is load-bearing: the MSBuild task otherwise inherits this
-    project's current global TargetFramework, so the net472 inner build would try to build the
-    net9.0-windows samples as net472 and fail with NETSDK1136 (and the modern leg would try to
-    build the net472-only attach target as net9.0). The target is also scoped to the modern leg so
+    project's current global TargetFramework, so the net462 inner build would try to build the
+    net8.0-windows samples as net462 and fail with NETSDK1136 (and the modern leg would try to
+    build the net462-only attach target as net8.0). The target is also scoped to the modern leg so
     the samples are not built twice, once per inner build.
   -->
   <Target Name="BuildDesktopSamples"

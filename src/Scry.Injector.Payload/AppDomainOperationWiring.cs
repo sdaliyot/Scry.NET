@@ -40,11 +40,13 @@ internal static class AppDomainOperationWiring
         var domains = ClrAppDomains.EnumerateDomains();
         var targetsDirectory = Path.GetDirectoryName(descriptorPath)!;
         var processId = System.Diagnostics.Process.GetCurrentProcess().Id;
-        var liveDomainKeys = (await TargetDiscovery.FindAsync(targetsDirectory, cancellationToken)
-            .ConfigureAwait(false))
-            .Where(item => item.Descriptor.Target.ProcessId == processId)
-            .Select(item => item.Descriptor.Target.AppDomainId)
-            .ToHashSet();
+        // Built via the constructor rather than Enumerable.ToHashSet, which is not inbox on this
+        // project's net462 floor (added to .NET Framework only in 4.7.1).
+        var liveDomainKeys = new HashSet<int?>(
+            (await TargetDiscovery.FindAsync(targetsDirectory, cancellationToken)
+                .ConfigureAwait(false))
+                .Where(item => item.Descriptor.Target.ProcessId == processId)
+                .Select(item => item.Descriptor.Target.AppDomainId));
 
         var result = new
         {

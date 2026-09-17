@@ -126,7 +126,7 @@ public sealed class TcpTransportTests
             new ScryEndpointAddress("127.0.0.1", forwarder.Port));
         Assert.True((await client.RequestAsync("capabilities")).Success);
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
         // Repeated through the CLI, with the (bogus-port) descriptor written to a path outside
         // the targets directory - the shape of the actual remote-descriptor workflow.
         var descriptorPath = Path.Combine(Path.GetTempPath(), $"scry-forwarded-{Guid.NewGuid():N}.json");
@@ -371,7 +371,7 @@ public sealed class TcpTransportTests
             () => refused.ConnectAsync(IPAddress.Loopback, port));
     }
 
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
     [Fact]
     public async Task Schema_lists_address_under_common_options_and_tcp_port_under_attach()
     {
@@ -484,9 +484,9 @@ public sealed class TcpTransportTests
 
         private async Task AcceptAsync(CancellationToken cancellationToken)
         {
-            // Portable across net472 and net9.0: neither TcpListener.AcceptSocketAsync nor
+            // Portable across net462 and net8.0: neither TcpListener.AcceptSocketAsync nor
             // Socket.ConnectAsync(IPAddress,int) took a CancellationToken until well after
-            // net472, so this relies on Stop()/Dispose() to unblock a pending accept, the same
+            // net462, so this relies on Stop()/Dispose() to unblock a pending accept, the same
             // way RuntimeHost's own TCP accept loop does.
             try
             {

@@ -5,10 +5,10 @@ using Scry.Endpoint;
 
 namespace Scry.Tests;
 
-// Every test here shells out to the scry CLI, which is net9.0 only, and uses
+// Every test here shells out to the scry CLI, which is modern-.NET only, and uses
 // ProcessStartInfo.ArgumentList and Process.WaitForExitAsync - neither of which exists on
 // .NET Framework. Scope it to the modern leg, like the other CLI-driving tests here.
-#if NET9_0_OR_GREATER
+#if !NETFRAMEWORK
 [Collection("Scry integration")]
 public sealed class CliContractTests
 {
