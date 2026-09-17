@@ -65,6 +65,13 @@ public sealed class EndpointOptions
     public string? AuditDirectory { get; init; }
 
     /// <summary>
+    /// Overrides the rendezvous directory the connection descriptor is published into. Null uses
+    /// the default directory. See <see cref="Scry.Runtime.RuntimeHostOptions.TargetsDirectory"/>
+    /// for when this is needed.
+    /// </summary>
+    public string? TargetsDirectory { get; init; }
+
+    /// <summary>
     /// Starts a loopback TCP listener alongside the named pipe when set: null (the default) starts
     /// no listener, 0 binds an OS-assigned free port, and 1-65535 binds that fixed port. See
     /// <see cref="Scry.Runtime.RuntimeHostOptions.TcpPort"/> for the trust-boundary implications.
@@ -391,7 +398,8 @@ public sealed class EndpointHost : IAsyncDisposable, IDisposable
                 AuditEnabled = selected.AuditEnabled,
                 AuditDirectory = selected.AuditDirectory,
                 AuditCallback = selected.AuditCallback,
-                TcpPort = selected.TcpPort
+                TcpPort = selected.TcpPort,
+                TargetsDirectory = selected.TargetsDirectory
             });
         return new(runtime, builder.Registrations);
     }

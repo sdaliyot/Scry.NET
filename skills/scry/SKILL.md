@@ -809,6 +809,19 @@ capability token in the descriptor is the only gate). Treat a remote descriptor 
 as a local one - never copy it into logs, chat, or source control - and delete it once the task is
 done, since it is a bearer credential for the remote endpoint's whole lifetime.
 
+## Attaching across Windows identities on the same machine
+
+A target running as a different Windows identity than the one attaching - a service account, or
+an IIS application pool, especially one with no loaded user profile - needs `--targets-dir <path>`
+on `scry attach`, and that **same** `--targets-dir` on every command afterward, including
+`scry discover`: the descriptor lives only in the directory it was told to use. It also needs
+`--tcp-port 0` (or a fixed port) on the attach itself, because the named pipe is protected to the
+identity that created it - a cross-identity attach can only ever be verified over TCP, never the
+pipe, no exceptions. If `--targets-dir` was given but the target's identity still cannot write to
+it, grant access once with `icacls <path> /grant "<target identity>":(OI)(CI)M`; Scry never
+modifies permissions itself. See
+[`README.md`, "Attaching to a service or IIS application pool"](../../README.md#attaching-to-a-service-or-iis-application-pool).
+
 ## Structured error recovery
 
 Use the error code before the message:

@@ -6,14 +6,65 @@ namespace Scry.Contracts;
 
 public static class TargetDiscovery
 {
+    /// <summary>
+    /// The default rendezvous directory. Can resolve to a <em>relative</em> path - <c>Scry\targets</c>
+    /// - when <see cref="Environment.SpecialFolder.LocalApplicationData"/> returns an empty string,
+    /// which happens under an identity with no loaded user profile (an IIS application pool with
+    /// <c>loadUserProfile="false"</c>, or a service account). Callers that need a guaranteed-rooted
+    /// path should go through <see cref="ResolveDirectory"/> instead of reading this directly.
+    /// </summary>
     public static string DirectoryPath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Scry",
             "targets");
 
-    public static string GetDescriptorPath(string targetId) =>
-        Path.Combine(DirectoryPath, $"{targetId}.json");
+    /// <summary>
+    /// Resolves the rendezvous directory a caller should actually use: <paramref name="directory"/>
+    /// made absolute when supplied, otherwise <see cref="DirectoryPath"/> validated to be rooted.
+    /// This is the one place that validation happens, so every directory-dependent member below
+    /// funnels through it rather than repeating the check.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="directory"/> was supplied but is not an absolute path.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// No directory was supplied and <see cref="DirectoryPath"/> resolved to a relative path -
+    /// meaning <see cref="Environment.SpecialFolder.LocalApplicationData"/> returned an empty
+    /// string, which happens under an identity with no loaded user profile.
+    /// </exception>
+    public static string ResolveDirectory(string? directory)
+    {
+        if (directory is not null)
+        {
+            if (!Path.IsPathRooted(directory))
+            {
+                throw new ArgumentException(
+                    $"The Scry rendezvous directory '{directory}' must be an absolute path.",
+                    nameof(directory));
+            }
+
+            return Path.GetFullPath(directory);
+        }
+
+        var defaultPath = DirectoryPath;
+        if (!Path.IsPathRooted(defaultPath))
+        {
+            throw new InvalidOperationException(
+                $"The Scry rendezvous directory resolved to the relative path '{defaultPath}' and " +
+                "must be absolute. Environment.SpecialFolder.LocalApplicationData returned an " +
+                "empty path, which happens when a process runs under an identity with no loaded " +
+                "user profile - an IIS application pool with loadUserProfile=\"false\", or a " +
+                "service account. Set RuntimeHostOptions.TargetsDirectory " +
+                "(scry attach --targets-dir <path>) to an absolute directory both the target's " +
+                "identity and the tooling can use.");
+        }
+
+        return defaultPath;
+    }
+
+    public static string GetDescriptorPath(string targetId, string? directory = null) =>
+        Path.Combine(ResolveDirectory(directory), $"{targetId}.json");
 
     public static async Task<ConnectionDescriptor> ReadAsync(
         string path,
@@ -28,17 +79,29 @@ public static class TargetDiscovery
     }
 
     public static async Task<IReadOnlyList<(ConnectionDescriptor Descriptor, string Path)>> FindAsync(
+        string? directory = null,
         CancellationToken cancellationToken = default)
     {
-        if (!Directory.Exists(DirectoryPath))
+        var resolvedDirectory = ResolveDirectory(directory);
+        if (!Directory.Exists(resolvedDirectory))
         {
             return Array.Empty<(ConnectionDescriptor Descriptor, string Path)>();
         }
 
         var results = new List<(ConnectionDescriptor Descriptor, string Path)>();
-        foreach (var path in Directory.EnumerateFiles(DirectoryPath, "*.json"))
+        foreach (var path in Directory.EnumerateFiles(resolvedDirectory, "*.json"))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Only a file whose name matches a descriptor's own naming (a bare 32-character hex
+            // GUID, see RuntimeHost's targetId) is treated as rendezvous state at all. A caller-
+            // chosen directory can otherwise contain unrelated *.json files - config, appsettings -
+            // that must never be parsed as a descriptor or deleted as a stale one below.
+            if (!IsDescriptorFileName(Path.GetFileNameWithoutExtension(path)))
+            {
+                continue;
+            }
+
             try
             {
                 var descriptor = await ReadAsync(path, cancellationToken).ConfigureAwait(false);
@@ -80,9 +143,10 @@ public static class TargetDiscovery
 
     public static async Task<(ConnectionDescriptor Descriptor, string Path)> ResolveAsync(
         string identityOrAlias,
+        string? directory = null,
         CancellationToken cancellationToken = default)
     {
-        var matches = (await FindAsync(cancellationToken).ConfigureAwait(false))
+        var matches = (await FindAsync(directory, cancellationToken).ConfigureAwait(false))
             .Where(item =>
                 string.Equals(item.Descriptor.Target.TargetId, identityOrAlias, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(item.Descriptor.Target.Alias, identityOrAlias, StringComparison.OrdinalIgnoreCase) ||
@@ -112,6 +176,31 @@ public static class TargetDiscovery
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    /// <summary>
+    /// True when <paramref name="fileNameWithoutExtension"/> has the exact shape of a descriptor's
+    /// name: <c>Guid.NewGuid().ToString("N")</c> - 32 lowercase hexadecimal characters, no dashes.
+    /// Anything else is left alone by <see cref="FindAsync"/>, so a caller-chosen rendezvous
+    /// directory that also holds unrelated JSON is never parsed or deleted.
+    /// </summary>
+    private static bool IsDescriptorFileName(string fileNameWithoutExtension)
+    {
+        if (fileNameWithoutExtension.Length != 32)
+        {
+            return false;
+        }
+
+        foreach (var character in fileNameWithoutExtension)
+        {
+            var isLowerHex = character is >= '0' and <= '9' or >= 'a' and <= 'f';
+            if (!isLowerHex)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void ValidateDescriptor(ConnectionDescriptor descriptor, string path)

@@ -58,6 +58,7 @@ public static class InjectedEndpointEntryPoint
         string? errorPath = null;
         string? adapters = null;
         int? tcpPort = null;
+        string? targetsDirectory = null;
         foreach (var line in argument.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = line.IndexOf('=');
@@ -90,23 +91,31 @@ public static class InjectedEndpointEntryPoint
                 // problem when EndpointHost.Start actually runs, where TryWriteFailure can record it.
                 tcpPort = int.TryParse(value, out var parsed) ? parsed : (int?)null;
             }
+            else if (name.Equals("targets", StringComparison.OrdinalIgnoreCase))
+            {
+                targetsDirectory = value;
+            }
         }
 
-        return new(alias, errorPath, adapters, tcpPort);
+        return new(alias, errorPath, adapters, tcpPort, targetsDirectory);
     }
 
-    private static EndpointOptions BuildOptions(BootstrapConfiguration configuration)
-    {
-        // Options are built unconditionally - not only when Alias is not null, as before this
-        // field existed - since that pattern does not survive a second optional field: TcpPort
-        // must be threaded through even when Alias is null. EndpointOptions is a plain class
-        // (no "with" support), and its Alias property already supplies its own default when left
-        // unset, so the explicit alias fallback below is an if/else on which initializer to use
-        // rather than a copy-and-override.
-        return configuration.Alias is null
-            ? new EndpointOptions { TcpPort = configuration.TcpPort }
-            : new EndpointOptions { Alias = configuration.Alias, TcpPort = configuration.TcpPort };
-    }
+    private static EndpointOptions BuildOptions(BootstrapConfiguration configuration) =>
+        // EndpointOptions is a plain class (no "with" support), and its Alias property already
+        // supplies its own default when left unset, so the branch is only on which initializer to
+        // use - every other field is threaded through unconditionally on both.
+        configuration.Alias is null
+            ? new EndpointOptions
+            {
+                TcpPort = configuration.TcpPort,
+                TargetsDirectory = configuration.TargetsDirectory
+            }
+            : new EndpointOptions
+            {
+                Alias = configuration.Alias,
+                TcpPort = configuration.TcpPort,
+                TargetsDirectory = configuration.TargetsDirectory
+            };
 
     private static string? Decode(string encoded)
     {
@@ -156,5 +165,6 @@ public static class InjectedEndpointEntryPoint
         string? Alias,
         string? ErrorPath,
         string? Adapters,
-        int? TcpPort = null);
+        int? TcpPort = null,
+        string? TargetsDirectory = null);
 }

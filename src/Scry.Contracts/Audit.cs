@@ -112,10 +112,12 @@ public static class AuditOutcomes
 /// <summary>
 /// Where the audit log lives, and why it is not simply beside the connection descriptors.
 /// <see cref="TargetDiscovery.FindAsync"/> globs every <c>*.json</c> file under
-/// <see cref="TargetDiscovery.DirectoryPath"/> and deletes any that fails to parse as a
-/// <see cref="ConnectionDescriptor"/> - an audit file placed there, or even named with a
-/// <c>.json</c> extension there, would be silently destroyed by the next <c>scry discover</c>.
-/// Hence a sibling directory and the <c>.jsonl</c> extension.
+/// <see cref="TargetDiscovery.DirectoryPath"/> whose name has a descriptor's own shape and deletes
+/// any that fails to parse as a <see cref="ConnectionDescriptor"/> - an audit file placed there,
+/// or even named with a <c>.json</c> extension there, would be silently destroyed by the next
+/// <c>scry discover</c>. The filename-shape check is defence in depth, not a reason to change this:
+/// a sibling directory and the <c>.jsonl</c> extension are justified on their own by ownership and
+/// rotation, independent of the deletion hazard.
 /// </summary>
 public static class AuditPaths
 {

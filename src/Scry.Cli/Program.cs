@@ -57,12 +57,8 @@ internal static class Cli
             var options = ParseOptions(optionArguments);
             if (command == "discover")
             {
-                if (options.Count != 0)
-                {
-                    throw new CliUsageException("The discover command does not accept options.");
-                }
-
-                return await DiscoverAsync().ConfigureAwait(false);
+                EnsureOnly(options, "targets-dir");
+                return await DiscoverAsync(options).ConfigureAwait(false);
             }
 
             if (command is "scenario" or "batch")
@@ -87,7 +83,8 @@ internal static class Cli
                 "source",
                 "json",
                 "correlation",
-                "timeout");
+                "timeout",
+                "targets-dir");
             // Parsed before any I/O, so a malformed option is reported as a usage error rather
             // than being masked by a target that happens not to be running.
             var requestTimeout = ParseTimeout(options);
@@ -213,7 +210,12 @@ internal static class Cli
         }
 
         var result = await AttachService
-            .AttachAsync(parsed.Target, parsed.Alias, parsed.Adapters, parsed.TcpPort)
+            .AttachAsync(
+                parsed.Target,
+                parsed.Alias,
+                parsed.Adapters,
+                parsed.TcpPort,
+                parsed.TargetsDirectory)
             .ConfigureAwait(false);
         if (!result.Success)
         {
@@ -221,26 +223,60 @@ internal static class Cli
             return TargetError;
         }
 
-        await using var client = await ScryClient.ConnectAsync(
-            result.Descriptor!,
-            clientName: "scry attach",
-            ephemeralSession: true).ConfigureAwait(false);
-        WriteJson(new
+        // The pipe is tried first - that is what verifying a same-identity attach has always
+        // meant - and only falls back to TCP when the pipe is refused. A protected, owner-only
+        // named pipe (RuntimeHost.CreatePipe on .NET Framework) refuses every identity but the one
+        // that created it, so a cross-identity attach can only ever be verified over TCP.
+        string handshakeTransport;
+        ScryClient client;
+        try
         {
-            success = true,
-            target = result.Target,
-            descriptorPath = result.DescriptorPath,
-            // The bound TCP port, so an operator learns it without opening the token-bearing
-            // descriptor file - never the capability token itself.
-            tcpPort = result.Descriptor!.TcpPort,
-            handshake = client.Handshake
-        });
+            client = await ScryClient.ConnectAsync(
+                result.Descriptor!,
+                clientName: "scry attach",
+                ephemeralSession: true).ConfigureAwait(false);
+            handshakeTransport = ScryTransports.Pipe;
+        }
+        catch (UnauthorizedAccessException) when (result.Descriptor!.TcpPort is not null)
+        {
+            client = await ScryClient.ConnectOverTcpAsync(
+                result.Descriptor!,
+                clientName: "scry attach",
+                ephemeralSession: true).ConfigureAwait(false);
+            handshakeTransport = ScryTransports.Tcp;
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            // No TCP port was requested, so there is no transport left to fall back to. Say so
+            // plainly rather than reporting a bare access-denied.
+            throw new CliUsageException(
+                "The named pipe refused this identity, and no --tcp-port was requested to fall " +
+                "back to. Re-attach with --tcp-port 0 to verify across identities. " +
+                exception.Message);
+        }
+
+        await using (client)
+        {
+            WriteJson(new
+            {
+                success = true,
+                target = result.Target,
+                descriptorPath = result.DescriptorPath,
+                // The bound TCP port, so an operator learns it without opening the token-bearing
+                // descriptor file - never the capability token itself.
+                tcpPort = result.Descriptor!.TcpPort,
+                handshakeTransport,
+                handshake = client.Handshake
+            });
+        }
+
         return Success;
     }
 
-    private static async Task<int> DiscoverAsync()
+    private static async Task<int> DiscoverAsync(IReadOnlyDictionary<string, string> options)
     {
-        var targets = await TargetDiscovery.FindAsync().ConfigureAwait(false);
+        options.TryGetValue("targets-dir", out var targetsDirectory);
+        var targets = await TargetDiscovery.FindAsync(targetsDirectory).ConfigureAwait(false);
         var result = new
         {
             protocolVersion = ProtocolConstants.Version,
@@ -433,7 +469,9 @@ internal static class Cli
 
         if (options.TryGetValue("target", out var target))
         {
-            return (await TargetDiscovery.ResolveAsync(target).ConfigureAwait(false)).Descriptor;
+            options.TryGetValue("targets-dir", out var targetsDirectory);
+            return (await TargetDiscovery.ResolveAsync(target, targetsDirectory).ConfigureAwait(false))
+                .Descriptor;
         }
 
         throw new CliUsageException("Specify exactly one of --descriptor <path> or --target <id-or-alias>.");

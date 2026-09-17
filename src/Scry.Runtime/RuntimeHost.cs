@@ -38,6 +38,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
     private readonly Task _tcpAcceptTask;
     private readonly TcpListener? _tcpListener;
     private readonly EventHandler _processExitHandler;
+    private readonly string _targetsDirectory;
     private int _connectionId;
     private int _disposed;
 
@@ -96,6 +97,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 "TcpPort must be 0-65535, or null to start no TCP listener.");
         }
 
+        // Resolved and validated before the TCP bind below: a host that cannot publish its
+        // descriptor must never be left holding a bound socket.
+        var targetsDirectory = TargetDiscovery.ResolveDirectory(options.TargetsDirectory);
+
         // The socket must be bound before Descriptor is constructed, so the descriptor can
         // publish the port actually bound (which matters when the caller asked for port 0). That
         // puts a bind ahead of the rest of this constructor, which can still throw - so from here
@@ -146,7 +151,8 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 TcpAddress: boundTcpPort is null ? null : IPAddress.Loopback.ToString(),
                 TcpPort: boundTcpPort,
                 MachineName: Environment.MachineName);
-            DescriptorPath = TargetDiscovery.GetDescriptorPath(targetId);
+            _targetsDirectory = targetsDirectory;
+            DescriptorPath = TargetDiscovery.GetDescriptorPath(targetId, targetsDirectory);
 
             _sessions = new(
                 targetId,
@@ -739,7 +745,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
 
     private void PublishDescriptor()
     {
-        Directory.CreateDirectory(TargetDiscovery.DirectoryPath);
+        Directory.CreateDirectory(_targetsDirectory);
         var temporaryPath = $"{DescriptorPath}.{Guid.NewGuid():N}.tmp";
         var json = JsonSerializer.Serialize(Descriptor, ScryJson.Options);
         File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));

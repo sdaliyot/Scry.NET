@@ -61,6 +61,17 @@ Whoever holds a copy of it can drive the target for as long as the process runs,
 can reach the forwarded port. Treat it accordingly: never commit it, log it, or leave it lying
 around after the task that needed it is done - delete it.
 
+**A caller-chosen rendezvous directory (`RuntimeHostOptions.TargetsDirectory` / `--targets-dir`)
+moves the token-bearing descriptor out of the one location the OS already scopes to a single
+Windows user.** The default directory, `%LOCALAPPDATA%\Scry\targets`, inherits its access control
+from the user profile it lives under - only that user (and an administrator) can read it without
+extra effort. A directory chosen to let two different identities agree on where to publish carries
+no such guarantee: it must never be a network share, a world-readable path, or a directory any
+other principal on the machine can list. This override exists for exactly one situation - attaching
+across Windows identities on the same machine, most commonly a service account or an IIS
+application pool with no loaded user profile - and the default remains the one to prefer whenever
+both sides already agree on an identity.
+
 **There is no capability restriction and no production-enablement gate, by decision.** `EndpointHost.Start()`
 with no arguments is a valid call that opens a fully-capable endpoint in any build configuration -
 there is no `#if DEBUG`, no required environment variable, no acknowledgement parameter. This was

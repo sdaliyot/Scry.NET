@@ -65,6 +65,21 @@ public sealed class RuntimeHostOptions
     public string? AuditDirectory { get; init; }
 
     /// <summary>
+    /// Overrides the rendezvous directory the connection descriptor is published into and the
+    /// injector's bootstrap diagnostics are written into. Null uses the default directory
+    /// (<see cref="Scry.Contracts.TargetDiscovery.DirectoryPath"/>).
+    /// <para>
+    /// Needed whenever the endpoint's process runs under an identity with no loaded user profile -
+    /// an IIS application pool with <c>loadUserProfile="false"</c>, or a service account - because
+    /// <c>Environment.SpecialFolder.LocalApplicationData</c> then resolves to an empty path, and
+    /// because the tooling attaching from a different identity would otherwise look in its own
+    /// default directory rather than this endpoint's. Must be an absolute path both this process's
+    /// identity and the attaching tool's identity can write to.
+    /// </para>
+    /// </summary>
+    public string? TargetsDirectory { get; init; }
+
+    /// <summary>
     /// Starts a loopback TCP listener alongside the named pipe when set: null (the default) starts
     /// no listener, 0 binds an OS-assigned free port, and 1-65535 binds that fixed port. Off by
     /// default, deliberately - a loopback TCP socket has no DACL and no per-user gate, so enabling

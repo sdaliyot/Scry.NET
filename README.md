@@ -171,6 +171,11 @@ When packaging lands there will be two routes: a NuGet package for test projects
 Until then, examples written as `scry ...` assume the built CLI is on your `PATH`; from a clone,
 `dotnet run --project src\Scry.Cli -- ...` is the equivalent.
 
+`dotnet publish src\Scry.Cli` produces an attach-capable CLI (the native helper and the injection
+payload are staged into the publish output). `dotnet pack`/`PackAsTool` does not yet - the packed
+tool can reach a target only through `--descriptor`/`--target` against an endpoint someone else
+attached, not perform `scry attach` itself - so prefer `dotnet publish` until packaging is finished.
+
 ## Architecture
 
 The question that matters most is which assemblies end up inside your application. In attach mode
@@ -258,7 +263,7 @@ project reference Scry.NET without pulling roughly ten megabytes of compiler int
 ## Attaching to a process that does not reference Scry
 
 ```powershell
-scry attach <pid-or-process-name> [--alias <name>] [--adapters wpf|winforms]
+scry attach <pid-or-process-name> [--alias <name>] [--adapters wpf|winforms] [--tcp-port <port|0>] [--targets-dir <path>]
 ```
 
 The command inspects the target, injects the endpoint, waits for its discovery descriptor, performs
@@ -570,6 +575,39 @@ attach-mode only. Embedding replaces that box - the application starts its own l
 `EndpointOptions.TcpPort`, so step 1 disappears and only the descriptor handoff and the forward
 remain yours to arrange. The named pipe stays available to a local caller on the target machine
 throughout, unaffected by the TCP listener.
+
+## Attaching to a service or IIS application pool
+
+A target that runs under a Windows identity with no loaded user profile - an IIS application pool
+with `loadUserProfile="false"`, or many service accounts - cannot use the default rendezvous
+directory: `Environment.SpecialFolder.LocalApplicationData` resolves to an empty path for such an
+identity, so the endpoint has nowhere to publish its descriptor. The same problem shows up, in a
+milder form, whenever the target simply runs as a *different* identity than the one attaching -
+each identity has its own default directory, so the attaching tool would look in the wrong place
+even if the target published successfully.
+
+`--targets-dir <path>` (`RuntimeHostOptions.TargetsDirectory` / `EndpointOptions.TargetsDirectory`
+in-process) fixes both: it names an absolute directory both identities can use, instead of each
+side computing its own default.
+
+```powershell
+scry attach <pid> --tcp-port 0 --targets-dir C:\ScryRendezvous
+```
+
+Three things this does not do for you:
+
+- **The directory must already be writable by the target's identity.** Scry never changes
+  filesystem permissions; grant access yourself, for example
+  `icacls C:\ScryRendezvous /grant "IIS APPPOOL\MyPool":(OI)(CI)M`. If the identities differ and
+  access was not granted, `scry attach` reports both identities by name/SID and this remedy in its
+  failure message.
+- **Every later command needs the same `--targets-dir`**, including `scry discover` - the
+  descriptor lives only in the directory it was told to use, not in the default one as well.
+- **`--tcp-port` is not optional here.** The named pipe is protected to the identity that created
+  it (see [Security, authorization and limits](#security-authorization-and-limits)), so any other
+  identity - including this injector - can never open it. `scry attach` tries the pipe first and
+  falls back to TCP automatically when the pipe is refused, but the fallback only exists when a TCP
+  port was requested; without one, a cross-identity attach has no way to verify at all.
 
 ## Security, authorization and limits
 

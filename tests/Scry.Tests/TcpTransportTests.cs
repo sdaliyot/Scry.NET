@@ -219,7 +219,13 @@ public sealed class TcpTransportTests
     [Fact]
     public async Task A_foreign_descriptor_survives_discovery_while_a_stale_local_one_is_still_deleted()
     {
-        Directory.CreateDirectory(TargetDiscovery.DirectoryPath);
+        // A private directory rather than the live %LOCALAPPDATA%\Scry\targets, so this test
+        // cannot race a real endpoint's own descriptor running on the same machine.
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "scry-tcp-transport-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
 
         using var process = Process.GetCurrentProcess();
         var foreignId = Guid.NewGuid().ToString("N");
@@ -238,7 +244,7 @@ public sealed class TcpTransportTests
             "foreign-token",
             DateTimeOffset.UtcNow,
             MachineName: "OTHER-HOST-" + Guid.NewGuid().ToString("N"));
-        var foreignPath = TargetDiscovery.GetDescriptorPath(foreignId);
+        var foreignPath = TargetDiscovery.GetDescriptorPath(foreignId, directory);
         File.WriteAllText(
             foreignPath,
             JsonSerializer.Serialize(foreignDescriptor, ScryJson.Options));
@@ -261,14 +267,14 @@ public sealed class TcpTransportTests
             "scry-stale-pipe",
             "stale-token",
             DateTimeOffset.UtcNow);
-        var stalePath = TargetDiscovery.GetDescriptorPath(staleId);
+        var stalePath = TargetDiscovery.GetDescriptorPath(staleId, directory);
         File.WriteAllText(
             stalePath,
             JsonSerializer.Serialize(staleDescriptor, ScryJson.Options));
 
         try
         {
-            var found = await TargetDiscovery.FindAsync();
+            var found = await TargetDiscovery.FindAsync(directory);
             Assert.DoesNotContain(found, item => item.Descriptor.Target.TargetId == foreignId);
             Assert.DoesNotContain(found, item => item.Descriptor.Target.TargetId == staleId);
             Assert.True(File.Exists(foreignPath), "A foreign descriptor must not be deleted.");

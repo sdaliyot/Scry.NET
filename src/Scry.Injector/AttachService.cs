@@ -21,6 +21,14 @@ public sealed class AttachOptions
     /// </summary>
     public int? TcpPort { get; init; }
 
+    /// <summary>
+    /// Overrides the rendezvous directory both this attach and the endpoint it injects use. Null
+    /// uses the default directory. See <c>RuntimeHostOptions.TargetsDirectory</c> for when this is
+    /// needed - most commonly, attaching to a process running under a different Windows identity
+    /// than this one, such as an IIS application pool or a service account.
+    /// </summary>
+    public string? TargetsDirectory { get; init; }
+
     public string ComponentRoot { get; init; } = AppContext.BaseDirectory;
 
     public TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(15);
@@ -33,10 +41,17 @@ public static class AttachService
         string? alias = null,
         string? adapters = null,
         int? tcpPort = null,
+        string? targetsDirectory = null,
         CancellationToken cancellationToken = default) =>
         AttachAsync(
             ProcessTargetResolver.Resolve(target),
-            new AttachOptions { Alias = alias, Adapters = adapters, TcpPort = tcpPort },
+            new AttachOptions
+            {
+                Alias = alias,
+                Adapters = adapters,
+                TcpPort = tcpPort,
+                TargetsDirectory = targetsDirectory
+            },
             cancellationToken);
 
     public static async Task<AttachResult> AttachAsync(
@@ -48,12 +63,16 @@ public static class AttachService
         ProcessInspectionResult? inspection = null;
         try
         {
+            // Fail before anything else runs: an unrooted override should never surface 15 seconds
+            // later as a confusing startup timeout.
+            var targetsDirectory = TargetDiscovery.ResolveDirectory(selected.TargetsDirectory);
+
             inspection = ProcessInspector.Inspect(processId);
             ProcessInspector.EnsureCompatibleArchitecture(
                 ProcessInspector.CurrentArchitecture,
                 inspection.Architecture);
 
-            var existing = await FindDescriptorAsync(inspection, cancellationToken)
+            var existing = await FindDescriptorAsync(inspection, targetsDirectory, cancellationToken)
                 .ConfigureAwait(false);
             if (existing is not null)
             {
@@ -76,13 +95,19 @@ public static class AttachService
                 throw new InjectionException(InjectionErrorCode.BindingConflict, conflict);
             }
 
-            NativeBootstrap.Inject(inspection, components, selected.Alias, selected.Adapters, selected.TcpPort);
+            NativeBootstrap.Inject(
+                inspection,
+                components,
+                selected.Alias,
+                selected.Adapters,
+                selected.TcpPort,
+                targetsDirectory);
 
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutSource.CancelAfter(selected.StartupTimeout);
             while (true)
             {
-                var descriptor = await FindDescriptorAsync(inspection, timeoutSource.Token)
+                var descriptor = await FindDescriptorAsync(inspection, targetsDirectory, timeoutSource.Token)
                     .ConfigureAwait(false);
                 if (descriptor is not null)
                 {
@@ -115,23 +140,94 @@ public static class AttachService
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            var error = new InjectionError(
+                InjectionErrorCode.BootstrapFailed,
+                $"The injected bootstrap did not publish an endpoint within {selected.StartupTimeout}.");
             return AttachResult.Failed(
-                new InjectionError(
-                    InjectionErrorCode.BootstrapFailed,
-                    $"The injected bootstrap did not publish an endpoint within {selected.StartupTimeout}."),
-                inspection);
+                AppendIdentityDiagnostic(error, processId, selected), inspection);
         }
         catch (InjectionException exception)
         {
-            return AttachResult.Failed(exception.ToError(exception.Detail), inspection);
+            var error = exception.ToError(exception.Detail);
+            if (exception.Code == InjectionErrorCode.BootstrapFailed)
+            {
+                error = AppendIdentityDiagnostic(error, processId, selected);
+            }
+
+            return AttachResult.Failed(error, inspection);
         }
+    }
+
+    /// <summary>
+    /// Explains a bootstrap failure that may be caused by attaching across Windows identities - the
+    /// injector cannot see a descriptor the target published under its own identity's rendezvous
+    /// directory (when <see cref="AttachOptions.TargetsDirectory"/> was not used to make both sides
+    /// agree), and even when it can, the named pipe's owner-only DACL refuses any other identity, so
+    /// such an attach requires <see cref="AttachOptions.TcpPort"/>. Best-effort and additive: a
+    /// failed identity lookup on either side leaves the original message untouched rather than
+    /// implying the identities match.
+    /// </summary>
+    private static InjectionError AppendIdentityDiagnostic(
+        InjectionError error,
+        int processId,
+        AttachOptions selected)
+    {
+        // Attach mode is Windows-only end to end (ProcessInspector.Inspect refuses elsewhere), but
+        // only this call chain touches APIs the platform-compatibility analyzer marks Windows-only,
+        // so the guard is local rather than annotating the whole method. Same two-branch form as
+        // ProcessInspector.Inspect, for the same reason: OperatingSystem.IsWindows is .NET 5+.
+#if NETFRAMEWORK
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Windows))
+#else
+        if (!OperatingSystem.IsWindows())
+#endif
+        {
+            return error;
+        }
+
+        var targetUser = ProcessIdentity.TryGet(processId);
+        var thisUser = ProcessIdentity.TryGet(Process.GetCurrentProcess().Id);
+        if (targetUser is null || thisUser is null || string.Equals(
+                targetUser.Sid, thisUser.Sid, StringComparison.OrdinalIgnoreCase))
+        {
+            return error;
+        }
+
+        var lines = new List<string>
+        {
+            $"The target process runs as {targetUser}; this injector runs as {thisUser}.",
+        };
+        lines.Add(
+            selected.TargetsDirectory is null
+                ? "The target publishes its descriptor under its own identity's rendezvous " +
+                  "directory, which this identity cannot see by default. Pass --targets-dir " +
+                  "<path> to an absolute directory both identities can write to."
+                : "Both identities must be able to write to the --targets-dir directory already " +
+                  "given; grant the target's identity access, e.g. " +
+                  $"icacls \"{selected.TargetsDirectory}\" /grant \"<target identity>\":(OI)(CI)M");
+        if (selected.TcpPort is null)
+        {
+            lines.Add(
+                "The named pipe is protected to the identity that created it, so an attach across " +
+                "identities also requires --tcp-port 0 (or a fixed port) and connecting over TCP.");
+        }
+
+        var detail = string.Join(" ", lines);
+        return new InjectionError(
+            error.Kind,
+            error.Message,
+            error.NativeError,
+            error.Detail is null ? detail : error.Detail + " " + detail);
     }
 
     private static async Task<(ConnectionDescriptor Descriptor, string Path)?> FindDescriptorAsync(
         ProcessInspectionResult inspection,
+        string targetsDirectory,
         CancellationToken cancellationToken)
     {
-        var descriptor = (await TargetDiscovery.FindAsync(cancellationToken).ConfigureAwait(false))
+        var descriptor = (await TargetDiscovery.FindAsync(targetsDirectory, cancellationToken)
+            .ConfigureAwait(false))
             .FirstOrDefault(candidate =>
                 candidate.Descriptor.Target.ProcessId == inspection.ProcessId &&
                 candidate.Descriptor.Target.StartedAt == inspection.StartedAt);

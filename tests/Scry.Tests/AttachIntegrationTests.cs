@@ -172,6 +172,84 @@ public sealed class AttachIntegrationTests
     }
 
     /// <summary>
+    /// End-to-end proof that <c>--targets-dir</c> makes it through the same config-blob chain as
+    /// <c>--tcp-port</c> above, added after an attach into an IIS application pool identity with no
+    /// loaded user profile failed to publish its descriptor at all: the override must land the
+    /// descriptor in the given directory and nowhere else, through the real injector and payload,
+    /// not merely through <c>EndpointHost.Start</c> in-process (see <c>TargetsDirectoryTests</c> for
+    /// that half).
+    /// </summary>
+    [Fact]
+    public async Task Attached_endpoint_honours_a_targets_dir_override()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            ProcessInspector.CurrentArchitecture != TargetArchitecture.X64)
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var targetAssembly = Path.Combine(
+            root, "samples", "Scry.AttachTarget", "bin", "Release", "net9.0", "Scry.AttachTarget.dll");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        Assert.True(File.Exists(targetAssembly), $"Attach target is missing: {targetAssembly}");
+        Assert.True(
+            File.Exists(Path.Combine(
+                Path.GetDirectoryName(cliAssembly)!, "native", "win-x64", "Scry.Injector.Native.dll")),
+            "Build the native x64 helper before running the attach integration test.");
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), "scry-attach-targets-dir-tests", Guid.NewGuid().ToString("N"));
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"\"{targetAssembly}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start the attach target.");
+
+        try
+        {
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var reportedProcessId = await process.StandardOutput.ReadLineAsync(startupTimeout.Token);
+            Assert.Equal(process.Id.ToString(), reportedProcessId);
+
+            var alias = $"injected-targets-dir-test-{Guid.NewGuid():N}";
+            var attached = await RunCliAsync(
+                cliAssembly,
+                $"attach {process.Id} --alias {alias} --tcp-port 0 --targets-dir \"{directory}\"",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            Assert.True(
+                attached.ExitCode == 0,
+                $"Attach failed ({attached.ExitCode}): {attached.StandardOutput}{attached.StandardError}");
+            using var attachJson = JsonDocument.Parse(attached.StandardOutput);
+            Assert.True(attachJson.RootElement.GetProperty("success").GetBoolean());
+            var descriptorPath = attachJson.RootElement.GetProperty("descriptorPath").GetString()!;
+
+            Assert.StartsWith(directory, descriptorPath, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(descriptorPath));
+
+            var foundInOverride = await Scry.Contracts.TargetDiscovery.FindAsync(directory);
+            Assert.Contains(foundInOverride, item => item.Descriptor.Target.Alias == alias);
+
+            var foundInDefault = await Scry.Contracts.TargetDiscovery.FindAsync();
+            Assert.DoesNotContain(foundInDefault, item => item.Descriptor.Target.Alias == alias);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    /// <summary>
     /// The acceptance test for attach mode: a .NET Framework 4.7.2 WPF process that does not
     /// reference Scry at all, inspected and driven from outside. Covers the three things that make
     /// attach mode worth having, and that the modern-.NET console test above cannot show:

@@ -11,7 +11,8 @@ public static class AttachCommandLine
     public static readonly string[] AdapterValues = ["wpf", "winforms", "none"];
 
     public const string Usage =
-        "<pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>]";
+        "<pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>] " +
+        "[--targets-dir <path>]";
 
     public static AttachArguments Parse(string[] args)
     {
@@ -23,6 +24,7 @@ public static class AttachCommandLine
         string? alias = null;
         string? adapters = null;
         int? tcpPort = null;
+        string? targetsDirectory = null;
         for (var index = 1; index < args.Length; index++)
         {
             switch (args[index])
@@ -50,12 +52,25 @@ public static class AttachCommandLine
 
                     tcpPort = parsedPort;
                     break;
+                case "--targets-dir":
+                    var rawDirectory = RequireValue(args, ref index, "--targets-dir");
+
+                    // Rejected here, at parse time, rather than left to surface 15 seconds later
+                    // as a startup timeout once the target has already failed to publish.
+                    if (!Path.IsPathRooted(rawDirectory))
+                    {
+                        throw new AttachUsageException(
+                            $"--targets-dir requires an absolute path; found '{rawDirectory}'.");
+                    }
+
+                    targetsDirectory = rawDirectory;
+                    break;
                 default:
                     throw new AttachUsageException($"Unknown attach option '{args[index]}'.");
             }
         }
 
-        return new(args[0], alias, adapters, tcpPort);
+        return new(args[0], alias, adapters, tcpPort, targetsDirectory);
     }
 
     private static string RequireValue(string[] args, ref int index, string option)
@@ -69,6 +84,11 @@ public static class AttachCommandLine
     }
 }
 
-public sealed record AttachArguments(string Target, string? Alias, string? Adapters, int? TcpPort = null);
+public sealed record AttachArguments(
+    string Target,
+    string? Alias,
+    string? Adapters,
+    int? TcpPort = null,
+    string? TargetsDirectory = null);
 
 public sealed class AttachUsageException(string message) : Exception(message);

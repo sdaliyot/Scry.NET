@@ -272,6 +272,40 @@ public sealed class CliContractTests
         }
     }
 
+    /// <summary>
+    /// <c>AttachCommandLine.Usage</c> and the schema's <c>attach</c> command fields are two
+    /// independent, hand-written descriptions of the same option set - nothing keeps them in sync
+    /// mechanically. Added alongside <c>--targets-dir</c>, whose usage string and <c>CliField</c>
+    /// entry are exactly the kind of pair this drift could silently separate.
+    /// </summary>
+    [Fact]
+    public async Task Every_attach_option_in_the_usage_string_is_also_a_documented_field()
+    {
+        var schemaRun = await RunCliAsync(FindBuiltCli(), ["schema"]);
+        Assert.Equal(0, schemaRun.ExitCode);
+
+        using var schema = JsonDocument.Parse(schemaRun.StandardOutput);
+        var attach = schema.RootElement.GetProperty("commands")
+            .EnumerateArray()
+            .Single(command => command.GetProperty("command").GetString() == "attach");
+        var usage = attach.GetProperty("usage").GetString()!;
+        var documented = attach.GetProperty("request")
+            .GetProperty("fields")
+            .EnumerateArray()
+            .Select(field => field.GetProperty("name").GetString()!)
+            .Where(name => name.StartsWith("--", StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var inUsage = System.Text.RegularExpressions.Regex.Matches(usage, "--[a-z-]+")
+            .Select(match => match.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.True(
+            inUsage.SetEquals(documented),
+            $"attach usage names {string.Join(", ", inUsage.OrderBy(x => x))} but the schema " +
+            $"documents {string.Join(", ", documented.OrderBy(x => x))}.");
+    }
+
     private static string FindBuiltCli()
     {
         var root = FindRepositoryRoot();

@@ -28,4 +28,23 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    Without this, `dotnet publish` produces a scry.exe that fails every attach with
+    missing_native_helper: StageInjectorComponents above is AfterTargets="Build" and copies into
+    $(TargetDir), which publish never reads from. This is the direct transcription of
+    Scry.Injector.csproj's StageInjectionPayloadsForPublish for the same reason.
+  -->
+  <Target Name="StageInjectorComponentsForPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <StagedNative Include="$(TargetDir)native\**\*" />
+      <StagedPayload Include="$(TargetDir)payload\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StagedNative)"
+          DestinationFiles="@(StagedNative->'$(PublishDir)native\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(StagedPayload)"
+          DestinationFiles="@(StagedPayload->'$(PublishDir)payload\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

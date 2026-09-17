@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Text;
+using Scry.Contracts;
 
 namespace Scry.Injector;
 
@@ -36,7 +37,8 @@ internal static class NativeBootstrap
         BootstrapComponents components,
         string? alias,
         string? adapters,
-        int? tcpPort = null)
+        int? tcpPort = null,
+        string? targetsDirectory = null)
     {
         var access = ProcessCreateThread |
             ProcessQueryInformation |
@@ -52,8 +54,21 @@ internal static class NativeBootstrap
                 accessDeniedIsSecurityInterference: false);
         }
 
+        // Resolved and created here, by the injector - which validated it and typically runs with
+        // more privilege than the target - rather than left for the target's own first write. Both
+        // the status/error diagnostics below and the descriptor RuntimeHost later publishes are
+        // written by the target process, so the directory must exist and be writable by the
+        // target's identity before injection, not merely by the time RuntimeHost starts.
+        var resolvedTargetsDirectory = TargetDiscovery.ResolveDirectory(targetsDirectory);
+        Directory.CreateDirectory(resolvedTargetsDirectory);
+
+        // Bug: previously placed under the injector's own temp directory, which a target running
+        // under a different Windows identity cannot write to - silently losing the only diagnostic
+        // for a bootstrap failure. Both files are written by the target and read back by this
+        // (injecting) process, so they belong in the one directory both identities can already
+        // reach: the resolved rendezvous directory.
         var statusPath = Path.Combine(
-            Path.GetTempPath(),
+            resolvedTargetsDirectory,
             $"scry-bootstrap-{target.ProcessId}-{Guid.NewGuid():N}.bin");
         try
         {
@@ -71,6 +86,7 @@ internal static class NativeBootstrap
                 alias,
                 adapters,
                 tcpPort,
+                resolvedTargetsDirectory,
                 hostFxrPath,
                 statusPath,
                 statusPath + ".managed");
@@ -224,6 +240,7 @@ internal static class NativeBootstrap
         string? alias,
         string? adapters,
         int? tcpPort,
+        string targetsDirectory,
         string? hostFxrPath,
         string statusPath,
         string managedErrorPath)
@@ -269,6 +286,12 @@ internal static class NativeBootstrap
                 "tcpPort=" + Convert.ToBase64String(
                     Encoding.UTF8.GetBytes(port.ToString(System.Globalization.CultureInfo.InvariantCulture))));
         }
+
+        // Always sent, not only when the caller overrode it: this is what makes RuntimeHost publish
+        // its descriptor into the exact directory this injector resolved and created, rather than
+        // recomputing (and possibly getting a different answer from) its own default.
+        argumentLines.Add(
+            "targets=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(targetsDirectory)));
 
         // No native header change is needed for this key: the argument blob is length-prefixed
         // (kMaxArgumentLength in ScryBootstrap.cpp is 256 KiB), not a fixed-size buffer.

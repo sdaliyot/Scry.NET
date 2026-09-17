@@ -186,18 +186,21 @@ public sealed class EmbeddedHostTests
     [Fact]
     public async Task Discovery_ignores_and_removes_malformed_descriptors()
     {
-        Directory.CreateDirectory(TargetDiscovery.DirectoryPath);
-        var path = TargetDiscovery.GetDescriptorPath($"malformed-{Guid.NewGuid():N}");
+        // A private directory rather than the live %LOCALAPPDATA%\Scry\targets, so this test
+        // cannot race a real endpoint's own descriptor running on the same machine.
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "scry-embedded-host-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        // The bare 32-character-hex shape a real targetId has (RuntimeHost.cs), not a prefixed
+        // name: FindAsync only treats a file shaped like a descriptor as a cleanup candidate at all.
+        var path = TargetDiscovery.GetDescriptorPath(Guid.NewGuid().ToString("N"), directory);
         File.WriteAllText(path, "{}");
-        try
-        {
-            _ = await TargetDiscovery.FindAsync();
-            Assert.False(File.Exists(path));
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+
+        _ = await TargetDiscovery.FindAsync(directory);
+        Assert.False(File.Exists(path));
     }
 
     [Fact]

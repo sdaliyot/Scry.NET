@@ -35,6 +35,15 @@ internal static class CliContract
             "remote target, so this is meaningful only together with --descriptor."),
         F("--session", "string", false, "Resume a persistent session instead of using an ephemeral one."),
         F("--correlation", "string", false, "Correlation ID echoed back on the response."),
+        F(
+            "--targets-dir",
+            "path",
+            false,
+            "Absolute rendezvous directory to resolve --target against, overriding the default " +
+            "(%LOCALAPPDATA%\\Scry\\targets). Needed together with 'scry attach --targets-dir' " +
+            "whenever the target runs under a different Windows identity than this command - an " +
+            "IIS application pool or a service account - since that identity's default directory " +
+            "is not this one's."),
         F("--request", "file|-", false, "JSON request object from a file, or - for stdin."),
         F("--input", "file|-", false, "Compatible spelling of --request."),
         F("--source", "file|-", false, "C# source from a file, or - for stdin. Execution commands only."),
@@ -64,14 +73,22 @@ internal static class CliContract
         Local(
             "discover",
             "List live Scry targets visible to the current user.",
+            "scry discover [--targets-dir <path>]",
             "scry discover",
-            "scry discover",
-            [],
+            [
+                new CliField(
+                    "--targets-dir",
+                    "path",
+                    false,
+                    "Absolute rendezvous directory to search, overriding the default. See " +
+                    "'scry help attach' for --targets-dir.")
+            ],
             "Discovery result with protocolVersion and a deterministic targets array."),
         Local(
             "attach",
             "Inject the endpoint into a running process that does not reference Scry.",
-            "scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>]",
+            "scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] " +
+            "[--tcp-port <port|0>] [--targets-dir <path>]",
             "scry attach 1234 --adapters wpf",
             [
                 new CliField(
@@ -100,9 +117,26 @@ internal static class CliContract
                     "forward (see README, \"Reaching an endpoint on another machine\"). Any local " +
                     "process, as any Windows user, can attempt a handshake against it; the " +
                     "capability token is the only gate. The bound port is printed in this " +
-                    "command's own output - never the token.")
+                    "command's own output - never the token. Mandatory for a cross-identity " +
+                    "attach (see --targets-dir): the named pipe is protected to the identity that " +
+                    "created it, so any other identity - this injector included - must verify and " +
+                    "connect over TCP instead."),
+                new CliField(
+                    "--targets-dir",
+                    "path",
+                    false,
+                    "Absolute directory to publish the descriptor and bootstrap diagnostics into, " +
+                    "overriding the default (%LOCALAPPDATA%\\Scry\\targets). Required whenever the " +
+                    "target process runs under a Windows identity with no loaded user profile - an " +
+                    "IIS application pool with loadUserProfile=\"false\", or a service account - " +
+                    "since that identity's default directory does not resolve to a usable path; " +
+                    "also required whenever the target's identity differs from this command's, so " +
+                    "both sides agree on where the descriptor lives. Pass the same value to every " +
+                    "later --target-addressed command and to 'scry discover'. The directory must " +
+                    "already be writable by the target's identity - this command does not grant " +
+                    "access, only reports when it looks denied.")
             ],
-            "Attach result with the target descriptor path, the bound TCP port when --tcp-port was given, and a real protocol handshake; never the capability token."),
+            "Attach result with the target descriptor path, the bound TCP port when --tcp-port was given, the transport (pipe or tcp) the closing handshake actually verified over, and a real protocol handshake; never the capability token."),
         Local(
             "schema",
             "Emit the machine-readable CLI command and response contract.",
@@ -479,8 +513,8 @@ internal static class CliContract
             writer.WriteLine(
                 """
                 Usage:
-                  scry discover
-                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>]
+                  scry discover [--targets-dir <path>]
+                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>] [--targets-dir <path>]
                   scry schema
                   scry <command> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry jobs <start|status|wait|cancel|logs> (--target <id-or-alias> | --descriptor <path>) [options]
@@ -512,6 +546,8 @@ internal static class CliContract
                   --input <file|->        Compatible spelling of --request.
                   --timeout <seconds>     Give up if the target does not respond; 0 waits
                                           indefinitely. Defaults to 60 seconds.
+                  --targets-dir <path>    Absolute rendezvous directory to resolve --target
+                                          against, overriding the default. See 'scry help attach'.
 
                 C# source is accepted through --source <file|-> or redirected stdin. Use --request
                 for execution settings plus source. --json is retained for non-sensitive,
@@ -523,6 +559,14 @@ internal static class CliContract
                 example 'ssh -L 9000:127.0.0.1:<bound-port> user@target-host'), then pass
                 --descriptor <path> --address 127.0.0.1:9000. See README.md, "Reaching an endpoint
                 on another machine", for the full worked recipe and the trust-boundary tradeoff.
+
+                Attaching to a service or IIS application pool: a target running under a Windows
+                identity with no loaded user profile - or simply a different identity than this
+                command's - needs 'scry attach <pid> --tcp-port 0 --targets-dir <path>', the same
+                --targets-dir on every later command and on 'scry discover', and that directory
+                writable by the target's identity. The named pipe is owner-only, so cross-identity
+                verification always happens over TCP. See README.md, "Attaching to a service or IIS
+                application pool", for the full recipe.
 
                 Exit codes: 0 success, 2 usage/JSON, 3 target, 4 connection/protocol,
                 5 target operation, 6 scenario partial failure, 70 unexpected CLI failure.
