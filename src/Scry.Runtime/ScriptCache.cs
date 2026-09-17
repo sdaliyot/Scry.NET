@@ -105,11 +105,13 @@ internal readonly struct ScriptCacheKey : IEquatable<ScriptCacheKey>
     private readonly string _source;
     private readonly string _imports;
     private readonly string _references;
+    private readonly string _loadContext;
 
     public ScriptCacheKey(
         string source,
         IEnumerable<string> imports,
-        IReadOnlyList<string>? references)
+        IReadOnlyList<string>? references,
+        string? loadContext = null)
     {
         // The already-wrapped source, so an expression and a statement body cannot share a key.
         _source = source;
@@ -117,12 +119,18 @@ internal readonly struct ScriptCacheKey : IEquatable<ScriptCacheKey>
         // Joined rather than compared element-wise, so the key stays a cheap comparable struct.
         _imports = string.Join(Separator, imports);
         _references = references is null ? string.Empty : string.Join(Separator, references);
+
+        // A cached script's InteractiveAssemblyLoader is baked in at compile time, so two requests
+        // differing only by loadContext must not share a compiled script - the wrong one would keep
+        // resolving to whichever context happened to compile first.
+        _loadContext = loadContext ?? string.Empty;
     }
 
     public bool Equals(ScriptCacheKey other) =>
         string.Equals(_source, other._source, StringComparison.Ordinal) &&
         string.Equals(_imports, other._imports, StringComparison.Ordinal) &&
-        string.Equals(_references, other._references, StringComparison.Ordinal);
+        string.Equals(_references, other._references, StringComparison.Ordinal) &&
+        string.Equals(_loadContext, other._loadContext, StringComparison.Ordinal);
 
     public override bool Equals(object? obj) => obj is ScriptCacheKey other && Equals(other);
 
@@ -135,6 +143,7 @@ internal readonly struct ScriptCacheKey : IEquatable<ScriptCacheKey>
             hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(_source);
             hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(_imports);
             hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(_references);
+            hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(_loadContext);
             return hash;
         }
     }

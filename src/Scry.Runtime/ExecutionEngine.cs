@@ -143,7 +143,7 @@ internal sealed class ExecutionEngine
         // expression repeatedly, so without this every attempt paid a full compile - and a compile
         // means building a metadata reference for every loaded assembly plus Roslyn codegen, which
         // in a real application ran into seconds per attempt.
-        var cacheKey = new ScriptCacheKey(source, imports, request.References);
+        var cacheKey = new ScriptCacheKey(source, imports, request.References, request.LoadContext);
         var compilationCached = _scripts.TryGet(cacheKey, out var script, out var diagnostics);
         if (!compilationCached)
         {
@@ -151,13 +151,14 @@ internal sealed class ExecutionEngine
                 .WithEmitDebugInformation(false)
                 .WithReferences(_assemblies.GetMetadataReferences(
                     request.References,
-                    _options.MaximumExecutionReferences))
+                    _options.MaximumExecutionReferences,
+                    request.LoadContext))
                 .WithImports(imports);
             script = CSharpScript.Create<object?>(
                 source,
                 options,
                 typeof(ExecutionGlobals),
-                _assemblies.CreateExecutionAssemblyLoader());
+                _assemblies.CreateExecutionAssemblyLoader(request.LoadContext));
         }
 
         var stopwatch = Stopwatch.StartNew();
@@ -270,6 +271,20 @@ internal sealed class ExecutionEngine
             throw new ScryOperationException(
                 "invalid_request",
                 $"timeoutMilliseconds must be between 1 and {_options.MaximumExecutionMilliseconds}.");
+        }
+
+        if (request.LoadContext is not null)
+        {
+            if (string.IsNullOrWhiteSpace(request.LoadContext))
+            {
+                throw new ScryOperationException("invalid_request", "loadContext must be a non-empty string.");
+            }
+
+#if NETFRAMEWORK
+            throw new ScryOperationException(
+                "load_context_not_supported",
+                "loadContext targeting is available only on modern .NET; on .NET Framework, target a specific AppDomain with --appdomain / appdomain.start instead.");
+#endif
         }
     }
 

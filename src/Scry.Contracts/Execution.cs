@@ -13,12 +13,21 @@ public static class ExecutionMarshalTargets
     public const string UiThread = "ui";
 }
 
+/// <param name="LoadContext">
+/// Modern .NET only: also bind execution references against this <c>AssemblyLoadContext</c>, named
+/// as reported by <c>list-assemblies</c>/<c>find-types</c> (e.g. an isolated context created by
+/// <c>load-assembly --loadPolicy isolated</c>). Widens the eligible reference set - it does not
+/// replace the default context or the runtime's own, which stay eligible regardless. Rejected on
+/// .NET Framework, which has no load contexts; use <c>--appdomain</c> / <c>appdomain.start</c> there
+/// instead.
+/// </param>
 public sealed record ExecutionRequest(
     string Source,
     IReadOnlyList<string>? Imports = null,
     IReadOnlyList<string>? References = null,
     int? TimeoutMilliseconds = null,
-    string? Marshal = null);
+    string? Marshal = null,
+    string? LoadContext = null);
 
 /// <param name="CompilationCached">
 /// True when the submission reused an already-compiled script rather than compiling. Lets a caller

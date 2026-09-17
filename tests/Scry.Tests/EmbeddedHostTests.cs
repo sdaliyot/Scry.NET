@@ -717,6 +717,13 @@ public sealed class EmbeddedHostTests
             "load-assembly",
             new LoadAssemblyRequest(typeof(ExternalReference).Assembly.Location, "isolated"));
         Assert.Equal("load_policy_not_supported", isolated.Error?.Code);
+
+        // loadContext targets a modern-.NET-only concept (AssemblyLoadContext); .NET Framework has
+        // no load contexts at all, so it must fail clearly rather than being silently ignored.
+        var loadContextUnsupported = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest("return 1;", LoadContext: "Whatever"));
+        Assert.Equal("load_context_not_supported", loadContextUnsupported.Error?.Code);
 #else
         var cliAssemblyPath = Directory.EnumerateFiles(
                 Path.Combine(FindRepositoryRoot(), "src", "Scry.Cli", "bin"),
@@ -735,6 +742,23 @@ public sealed class EmbeddedHostTests
                 "return 1;",
                 References: [loaded.Assembly.FullName]));
         Assert.Equal("assembly_not_compatible", incompatibleReference.Error?.Code);
+
+        // A bogus loadContext must fail clearly rather than silently falling back to the default set.
+        var loadContextNotFound = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest("return 1;", LoadContext: "Scry.Isolated.does-not-exist"));
+        Assert.Equal("load_context_not_found", loadContextNotFound.Error?.Code);
+
+        // Naming the isolated context in loadContext widens execution to reach it - the same
+        // reference that was rejected above now compiles and runs.
+        var widenedReference = await client.RequestAsync(
+            "evaluate",
+            new ExecutionRequest(
+                "return 1;",
+                References: [loaded.Assembly.FullName],
+                LoadContext: loaded.Assembly.LoadContext));
+        Assert.True(widenedReference.Success, widenedReference.Error?.Message);
+        Assert.Equal(1, widenedReference.Result!.Value.GetProperty("value").GetProperty("value").GetInt32());
 #endif
     }
 

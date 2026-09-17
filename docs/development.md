@@ -295,9 +295,15 @@ Current limits:
   injection cannot be retried - it falls back to the default domain and reports why on
   `target.appDomainSelectionWarning`.
 - On modern .NET there is one AppDomain, but several `AssemblyLoadContext`s: `list-assemblies`,
-  `find-types` and `describe-type` already see every context, but `evaluate`/`execute` bind only
-  against the default context and the runtime's own, to keep runtime type identity from silently
-  diverging between two loads of the same assembly.
+  `find-types` and `describe-type` already see every context, and `evaluate`/`execute` bind by
+  default only against the default context and the runtime's own, to keep runtime type identity from
+  silently diverging between two loads of the same assembly. A request can opt in to also reach one
+  more context by naming it in `loadContext` - the same name `list-assemblies`/`find-types` report -
+  which widens the eligible reference set without ever narrowing it; identity is preserved because
+  the loader registers that context's live `Assembly` instances directly
+  (`InteractiveAssemblyLoader.RegisterDependency`), and its own copy of a same-named assembly is
+  preferred over the default context's. `loadContext` is rejected outright on .NET Framework, which
+  has no load contexts at all.
 - Supported targets are .NET Framework 4.7.2 (or later 4.x) and .NET 9 on Windows x86/x64, both verified end to end on both CLR families.
 - ARM64, cross-architecture injection, and production packaging are not implemented. Reaching an
   endpoint on another machine is supported through an operator-established loopback TCP listener
@@ -477,10 +483,10 @@ waiting for the dispatcher.
 
 `load-assembly` requires an absolute path. Loading differs by runtime:
 
-- On .NET 9, `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains isolated contexts for the host lifetime; there is no unload operation in this release. Isolated assemblies are available to list/find/describe operations but are intentionally excluded from Roslyn references.
+- On .NET 9, `default` calls `AssemblyLoadContext.Default.LoadFromAssemblyPath`. `isolated` creates a named collectible `AssemblyLoadContext` with `AssemblyDependencyResolver`. Scry retains isolated contexts for the host lifetime; there is no unload operation in this release. Isolated assemblies are available to list/find/describe operations, and to `evaluate`/`execute` once the request's `loadContext` names that context - otherwise they are excluded from Roslyn references, since referencing them without explicitly opting in would risk resolving to the wrong copy of a same-named type.
 - On .NET Framework 4.7.2, only `AppDomain.CurrentDomain` is supported. `default` uses `Assembly.LoadFrom` in that AppDomain, and descriptions report `DefaultAppDomain`. `isolated` fails with `load_policy_not_supported`: a child AppDomain cannot preserve Scry's in-process roots, handles, reflection objects, and Roslyn type identity.
 
-Loading is explicit: evaluation never loads assemblies by path or probes arbitrary directories. `list-assemblies` reports identity, location, dynamic status, load context, default-context status, and collectibility. `find-types` performs bounded filtering over loaded types and reports each type's load context. `describe-type` returns bounded member metadata; `assembly` and `loadContext` selectors disambiguate duplicate full type names across assemblies or contexts.
+Loading is explicit: evaluation never loads assemblies by path or probes arbitrary directories. `list-assemblies` reports identity, location, dynamic status, load context, default-context status, and collectibility. `find-types` performs bounded filtering over loaded types and reports each type's load context. `describe-type` returns bounded member metadata; `assembly` and `loadContext` selectors disambiguate duplicate full type names across assemblies or contexts. `evaluate`/`execute` accept their own `loadContext` on the execution request (distinct from `describe-type`'s selector, though it is the same context name) to widen which context's assemblies can be named in `references`.
 
 ## Jobs
 

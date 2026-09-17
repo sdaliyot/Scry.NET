@@ -66,6 +66,34 @@ public sealed class ScriptCacheTests
         Assert.True(CompilationCached(repeated));
     }
 
+#if !NETFRAMEWORK
+    /// <summary>
+    /// A cached script's InteractiveAssemblyLoader is baked in at compile time from whichever
+    /// loadContext compiled it, so a request differing only by loadContext must not reuse a script
+    /// compiled for a different (or no) loadContext - it would keep resolving the wrong context's
+    /// assemblies. .NET Framework has no load contexts, so loadContext is rejected outright there
+    /// rather than participating in the cache key (see EmbeddedHostTests' load_context_not_supported
+    /// coverage).
+    /// </summary>
+    [Fact]
+    public async Task LoadContext_is_part_of_the_key()
+    {
+        await using var context = await CacheHost.StartAsync();
+
+        var withoutContext = await context.EvaluateAsync(new ExecutionRequest("1 + 1"));
+        Assert.False(CompilationCached(withoutContext));
+
+        var withContext = await context.EvaluateAsync(
+            new ExecutionRequest("1 + 1", LoadContext: "Default"));
+        Assert.False(CompilationCached(withContext));
+
+        // ...and it is itself cached on repeat.
+        var repeated = await context.EvaluateAsync(
+            new ExecutionRequest("1 + 1", LoadContext: "Default"));
+        Assert.True(CompilationCached(repeated));
+    }
+#endif
+
     [Fact]
     public async Task An_expression_and_a_statement_body_with_the_same_text_do_not_share_an_entry()
     {

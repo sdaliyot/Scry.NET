@@ -176,7 +176,8 @@ internal sealed class AssemblyCatalog
 
     public IReadOnlyList<MetadataReference> GetMetadataReferences(
         IReadOnlyList<string>? selectors,
-        int maximumReferences)
+        int maximumReferences,
+        string? loadContext = null)
     {
         if (selectors is { Count: > 0 } && selectors.Count > maximumReferences)
         {
@@ -185,13 +186,24 @@ internal sealed class AssemblyCatalog
                 $"references exceeds the limit of {maximumReferences} entries.");
         }
 
+        if (!string.IsNullOrWhiteSpace(loadContext) &&
+            !LoadedAssemblies().Any(assembly => string.Equals(ContextName(assembly), loadContext, StringComparison.Ordinal)))
+        {
+            throw new ScryOperationException(
+                "load_context_not_found",
+                $"No selected assembly is loaded in context '{loadContext}'.");
+        }
+
         var assemblies = LoadedAssemblies()
             .Where(assembly =>
-                IsExecutionCompatible(assembly) &&
+                IsExecutionCompatible(assembly, loadContext) &&
                 !assembly.IsDynamic &&
                 TryGetLocation(assembly) is not null)
             .GroupBy(assembly => assembly.FullName, StringComparer.Ordinal)
-            .Select(group => group.First())
+            .Select(group => group
+                .OrderByDescending(assembly =>
+                    loadContext is not null && string.Equals(ContextName(assembly), loadContext, StringComparison.Ordinal))
+                .First())
             .ToArray();
         if (selectors is { Count: > 0 })
         {
@@ -211,14 +223,14 @@ internal sealed class AssemblyCatalog
                 {
                     throw new ScryOperationException(
                         "assembly_not_found",
-                        $"No compatible loaded assembly matches reference '{selector}'.");
+                        $"No loaded assembly matches reference '{selector}'.");
                 }
 
                 if (!assemblies.Any(assembly => AssemblyMatches(assembly, selector)))
                 {
                     throw new ScryOperationException(
                         "assembly_not_compatible",
-                        $"Assembly reference '{selector}' is not file-backed in the default load context and cannot preserve runtime type identity in C# execution.");
+                        $"Assembly reference '{selector}' is not eligible for C# execution: it must be file-backed, not generated at run time, and loaded in the default load context, the runtime's own context, or the requested loadContext.");
                 }
             }
         }
@@ -266,14 +278,19 @@ internal sealed class AssemblyCatalog
     /// instead, because there distinct versions are legitimate compile references; here only one can
     /// win.
     /// </summary>
-    public InteractiveAssemblyLoader CreateExecutionAssemblyLoader()
+    public InteractiveAssemblyLoader CreateExecutionAssemblyLoader(string? loadContext = null)
     {
         var loader = new InteractiveAssemblyLoader();
         var candidates = LoadedAssemblies()
-            .Where(IsExecutionCompatible)
+            .Where(assembly => IsExecutionCompatible(assembly, loadContext))
             .GroupBy(assembly => assembly.GetName().Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .Select(group => group
-                .OrderByDescending(assembly => assembly.GetName().Version ?? new Version(0, 0))
+                // A same-simple-named copy in the caller-selected context wins the tie ahead of the
+                // version compare, so the script binds the plugin's own Type rather than Default's -
+                // that is the whole identity guarantee this feature depends on.
+                .OrderByDescending(assembly =>
+                    loadContext is not null && string.Equals(ContextName(assembly), loadContext, StringComparison.Ordinal))
+                .ThenByDescending(assembly => assembly.GetName().Version ?? new Version(0, 0))
                 .First());
         foreach (var assembly in candidates)
         {
@@ -542,24 +559,31 @@ internal sealed class AssemblyCatalog
 #endif
     }
 
-    private static bool IsExecutionCompatible(Assembly assembly)
+    private static bool IsExecutionCompatible(Assembly assembly, string? loadContext)
     {
 #if NETFRAMEWORK
         // .NET Framework has a single default AppDomain and no load contexts, so there is no
-        // context to compare against. Accept any assembly Roslyn could actually reference:
-        // file-backed, not generated at run time, and not metadata-only. This deliberately does
-        // not accept everything loaded - a large host has hundreds of assemblies, and registering
-        // dynamic or locationless ones as interactive dependencies is pointless and slow.
+        // context to compare against; loadContext is validated and rejected before this is ever
+        // reached on this TFM (see ExecutionEngine's netfx guard), so it is intentionally unused
+        // here. Accept any assembly Roslyn could actually reference: file-backed, not generated at
+        // run time, and not metadata-only. This deliberately does not accept everything loaded - a
+        // large host has hundreds of assemblies, and registering dynamic or locationless ones as
+        // interactive dependencies is pointless and slow.
+        _ = loadContext;
         return !assembly.IsDynamic
             && !assembly.ReflectionOnly
             && TryGetLocation(assembly) is not null;
 #else
         // An injected payload is loaded into its own component context rather than Default, so
         // accept this runtime's own context too - otherwise execution would see a different
-        // assembly set when attached than when embedded.
+        // assembly set when attached than when embedded. A caller-selected loadContext widens this
+        // further, e.g. to reach an isolated context created by load-assembly, without ever
+        // narrowing it - Default and the runtime's own context stay eligible regardless.
         var context = AssemblyLoadContext.GetLoadContext(assembly);
         var runtimeContext = AssemblyLoadContext.GetLoadContext(typeof(AssemblyCatalog).Assembly);
-        return context == AssemblyLoadContext.Default || context == runtimeContext;
+        return context == AssemblyLoadContext.Default
+            || context == runtimeContext
+            || (loadContext is not null && string.Equals(ContextName(assembly), loadContext, StringComparison.Ordinal));
 #endif
     }
 }

@@ -154,10 +154,13 @@ Current, as of this document:
   change. Because the process's one native injection cannot be retried, a selector that cannot be
   honoured falls back to the default domain rather than failing the attach; the failure is reported
   on `target.appDomainSelectionWarning`, never silent. On modern .NET there are no secondary
-  AppDomains, and inspection already spans every `AssemblyLoadContext` - but `evaluate`/`execute`
-  bind only against the default context and the runtime's own, because the same type loaded twice
+  AppDomains, and inspection already spans every `AssemblyLoadContext`. `evaluate`/`execute` bind by
+  default only against the default context and the runtime's own, because the same type loaded twice
   under CoreCLR is two distinct `Type` instances and a submission must not silently bind the wrong
-  one.
+  one; a request can opt in to widen that to one more context by naming it in `loadContext`, and
+  identity stays correct because the loader registers that context's live assemblies directly rather
+  than re-resolving them by path. `loadContext` is additive only - it never narrows the default set -
+  and is rejected on .NET Framework, which has no load contexts to select.
 - **No production packaging.** There is no NuGet publication and no signed release; building from
   source is the only supported path today.
 - **Fatal runtime failures bypass the protocol entirely.** Process termination, a stack overflow, or

@@ -806,7 +806,8 @@ internal static class CliContract
                 F("imports", "string[]", false, "Additional allowed namespaces."),
                 F("references", "string[]", false, "Already-loaded compatible assembly names."),
                 F("timeoutMilliseconds", "integer", false, "Cooperative target timeout."),
-                F("marshal", "ui", false, "Run the submission on the host UI thread, which is what lets it touch a DependencyObject or a Control. Occupies that thread for the whole submission, so keep it short; timeoutMilliseconds cannot interrupt work already running there.")
+                F("marshal", "ui", false, "Run the submission on the host UI thread, which is what lets it touch a DependencyObject or a Control. Occupies that thread for the whole submission, so keep it short; timeoutMilliseconds cannot interrupt work already running there."),
+                F("loadContext", "string", false, "Modern .NET only: also bind execution references against this AssemblyLoadContext, named as list-assemblies/find-types report it (e.g. an isolated context from load-assembly --loadPolicy isolated). Widens the eligible reference set; rejected on .NET Framework.")
             ],
             result,
             example);

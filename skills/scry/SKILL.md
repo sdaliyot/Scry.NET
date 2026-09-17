@@ -621,6 +621,14 @@ Execution settings request:
 }
 ```
 
+On modern .NET, `evaluate`/`execute` bind by default only against the default
+`AssemblyLoadContext` and the runtime's own. To reference a type from another context - for
+example one loaded via `load-assembly --loadPolicy isolated` - add `loadContext` naming that
+context (the same name `list-assemblies`/`find-types`/`describe-type` report) alongside its
+assembly in `references`. This widens the eligible set; it never narrows it, and it is rejected
+with `load_context_not_supported` on .NET Framework, which has no load contexts. It is unrelated
+to `--appdomain`, which targets a .NET Framework AppDomain, not a load context.
+
 Timeouts are cooperative, not process isolation. Synchronous target code that ignores
 cancellation keeps running in the target - especially serious for a `"marshal": "ui"`
 submission, which holds the target's UI thread until it returns. `scry`'s own `--timeout`
