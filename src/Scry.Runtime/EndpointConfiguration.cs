@@ -80,6 +80,14 @@ public sealed class RuntimeHostOptions
     public string? TargetsDirectory { get; init; }
 
     /// <summary>
+    /// Surfaced verbatim on <see cref="Scry.Contracts.TargetMetadata.AppDomainSelectionWarning"/>.
+    /// Set only by the attach-time <c>--appdomain</c> path when a requested AppDomain could not be
+    /// honoured and this endpoint was started in the default AppDomain instead of failing the
+    /// attach outright. Null otherwise.
+    /// </summary>
+    public string? AppDomainSelectionWarning { get; init; }
+
+    /// <summary>
     /// Starts a loopback TCP listener alongside the named pipe when set: null (the default) starts
     /// no listener, 0 binds an OS-assigned free port, and 1-65535 binds that fixed port. Off by
     /// default, deliberately - a loopback TCP socket has no DACL and no per-user gate, so enabling

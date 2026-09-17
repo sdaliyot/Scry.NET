@@ -263,7 +263,7 @@ project reference Scry.NET without pulling roughly ten megabytes of compiler int
 ## Attaching to a process that does not reference Scry
 
 ```powershell
-scry attach <pid-or-process-name> [--alias <name>] [--adapters wpf|winforms] [--tcp-port <port|0>] [--targets-dir <path>]
+scry attach <pid-or-process-name> [--alias <name>] [--adapters wpf|winforms] [--tcp-port <port|0>] [--targets-dir <path>] [--appdomain <id|name|auto>]
 ```
 
 The command inspects the target, injects the endpoint, waits for its discovery descriptor, performs
@@ -275,6 +275,48 @@ Pass `--adapters wpf` (or `winforms`) to wire the matching desktop adapter insid
 see [Optional desktop adapters](#optional-desktop-adapters) for what that adds and why it is not
 automatic. The adapter needs no cooperation from the application - it discovers
 `Application.Current.Windows` and reuses the target's existing dispatcher.
+
+## Reaching a chosen AppDomain
+
+Injection always lands in the target's default AppDomain - the one place a managed foothold can be
+established without the target's cooperation. For a plain console host or worker that is usually
+the whole process, but an ASP.NET application under IIS, for one concrete example, keeps its own
+code in a *separate* AppDomain from the worker process's default one; attaching normally leaves an
+operator able to confirm the process is running and nothing about the application inside it.
+
+```powershell
+scry attach <pid> --appdomain <id|name|auto>
+```
+
+`<id>` is a numeric `AppDomain.Id`. `<name>` matches a domain's `FriendlyName` exactly, or as a
+*prefix* - useful because an ASP.NET application domain's name carries a volatile trailing sequence
+that changes on every recycle (`/LM/W3SVC/2/ROOT-1-134341132053660838`), while the leading
+`/LM/W3SVC/2/ROOT` - its actual, stable application id - does not. `auto` picks the single
+non-default domain when there is exactly one, and otherwise the default, rather than guessing among
+several.
+
+The endpoint's own process gets exactly one native injection for its whole lifetime, so a selector
+that cannot be honoured - it matches no domain, or several - does not fail the attach: the endpoint
+starts in the default domain instead, and the attach result's `target.appDomainSelectionWarning`
+says why. Once *any* endpoint is attached, reach the other domains without spending that injection
+again:
+
+```powershell
+scry appdomain.list --target my-app --request '{}'
+scry appdomain.start --target my-app --request '{"selector":"/LM/W3SVC/2/ROOT"}'
+```
+
+`appdomain.list` reports every AppDomain in the process and which ones already host an endpoint;
+`appdomain.start` marshals a sibling endpoint into the chosen one and returns its own alias
+(`<current-alias>-appdomain-<id>` unless you name one), ready for `--target`. Both operations, and
+`--appdomain` itself, only exist on .NET Framework attaches - injection into modern .NET always
+targets `CoreCLR`'s single AppDomain, so there is nothing to select between.
+
+This is COM interop (`ICorRuntimeHost`), not a native-bootstrap change: the payload already has a
+managed foothold in the default domain, and from there `EnumDomains`/`NextDomain` hand back real,
+live `System.AppDomain` references to every domain in the process. See
+[`docs/threat-model.md`](docs/threat-model.md) for what this does and does not change about the
+trust boundary.
 
 ## Embedded host
 
@@ -623,7 +665,7 @@ Scry.NET permits deliberate code execution and state mutation inside the target.
 
 Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
 
-Current attach limits are: default AppDomain/default CoreCLR load context only, x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no secondary-AppDomain targeting, no ARM64, and no production packaging.
+Current attach limits are: x86 and x64 only, .NET Framework 4.7.2 and .NET 9 only, no ARM64, and no production packaging. Injection itself always lands in the target's default AppDomain, but on .NET Framework the endpoint can then be placed in - or a sibling started in - any other AppDomain of that same process (`--appdomain`, `appdomain.list`/`appdomain.start`; see "Reaching a chosen AppDomain" below). On modern .NET, execution (`evaluate`/`execute`) is limited to the default `AssemblyLoadContext` and the runtime's own; inspection (`list-assemblies`, `find-types`, `describe-type`) already spans every load context.
 
 ## Build and test
 

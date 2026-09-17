@@ -56,7 +56,9 @@ public sealed class CliContractTests
                 "winforms.snapshot",
                 "winforms.wait",
                 "winforms.assert",
-                "winforms.screenshot"
+                "winforms.screenshot",
+                "appdomain.list",
+                "appdomain.start"
             ])
             .ToHashSet(StringComparer.Ordinal);
         Assert.Equal(expectedOperations, operations);

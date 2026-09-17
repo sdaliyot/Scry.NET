@@ -126,6 +126,13 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 ? (int?)null
                 : ((IPEndPoint)_tcpListener.LocalEndpoint).Port;
 
+            // Not threaded through options: reading AppDomain.CurrentDomain directly means every
+            // endpoint reports where it actually runs, with no separate value to keep in sync. On
+            // modern .NET IsDefaultAppDomain() is always true, so both fields stay null there with
+            // no extra guard needed.
+            var currentDomain = AppDomain.CurrentDomain;
+            var isDefaultDomain = currentDomain.IsDefaultAppDomain();
+
             Metadata = new(
                 targetId,
                 options.Alias,
@@ -140,7 +147,10 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                     .Append(options.Alias)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(alias => alias, StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
+                    .ToArray(),
+                AppDomainId = isDefaultDomain ? null : currentDomain.Id,
+                AppDomainFriendlyName = isDefaultDomain ? null : currentDomain.FriendlyName,
+                AppDomainSelectionWarning = options.AppDomainSelectionWarning
             };
             Descriptor = new(
                 ProtocolConstants.Version,
@@ -192,6 +202,11 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             });
             _processExitHandler = (_, _) => CleanupDescriptor();
             AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
+            // DomainUnload, not only ProcessExit: an endpoint hosted in a non-default AppDomain
+            // (see AppDomain targeting) dies when that domain unloads, which ProcessExit never
+            // fires for. The default domain itself never raises DomainUnload while the process is
+            // alive, so subscribing here unconditionally is harmless for every ordinary endpoint.
+            AppDomain.CurrentDomain.DomainUnload += _processExitHandler;
             _pipeAcceptTask = AcceptPipeConnectionsAsync(_stopping.Token);
             _tcpAcceptTask = _tcpListener is null
                 ? Task.CompletedTask
@@ -226,6 +241,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         }
 
         AppDomain.CurrentDomain.ProcessExit -= _processExitHandler;
+        AppDomain.CurrentDomain.DomainUnload -= _processExitHandler;
 #if NETFRAMEWORK
         _stopping.Cancel();
 #else

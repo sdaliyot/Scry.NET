@@ -12,7 +12,9 @@ internal static class CliContract
         "winforms.snapshot",
         "winforms.wait",
         "winforms.assert",
-        "winforms.screenshot"
+        "winforms.screenshot",
+        "appdomain.list",
+        "appdomain.start"
     ];
 
     /// <summary>
@@ -88,7 +90,7 @@ internal static class CliContract
             "attach",
             "Inject the endpoint into a running process that does not reference Scry.",
             "scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] " +
-            "[--tcp-port <port|0>] [--targets-dir <path>]",
+            "[--tcp-port <port|0>] [--targets-dir <path>] [--appdomain <id|name|auto>]",
             "scry attach 1234 --adapters wpf",
             [
                 new CliField(
@@ -134,9 +136,27 @@ internal static class CliContract
                     "both sides agree on where the descriptor lives. Pass the same value to every " +
                     "later --target-addressed command and to 'scry discover'. The directory must " +
                     "already be writable by the target's identity - this command does not grant " +
-                    "access, only reports when it looks denied.")
+                    "access, only reports when it looks denied."),
+                new CliField(
+                    "--appdomain",
+                    "id|name|auto",
+                    false,
+                    "Places the endpoint in a specific AppDomain of the target instead of its " +
+                    "default one - the only way to reach an ASP.NET application's own assemblies, " +
+                    "for example, since they live in the application's AppDomain, not the " +
+                    "process's default one. A numeric id, an exact or prefix match of a friendly " +
+                    "name (an ASP.NET application's own id is a stable prefix across recycles), or " +
+                    "'auto' for the single non-default domain when there is exactly one. Only " +
+                    ".NET Framework has more than one AppDomain; ignored on a modern .NET target. " +
+                    "A selector matching zero or several domains, or a domain whose own binding " +
+                    "policy conflicts with the payload, does not fail the attach - the endpoint " +
+                    "starts in the default AppDomain instead, reported as " +
+                    "target.appDomainSelectionWarning, since the one native injection this attach " +
+                    "gets cannot be retried without recycling the target. See also " +
+                    "'scry appdomain.list' / 'scry appdomain.start', which reach other AppDomains " +
+                    "from an endpoint already attached without this flag.")
             ],
-            "Attach result with the target descriptor path, the bound TCP port when --tcp-port was given, the transport (pipe or tcp) the closing handshake actually verified over, and a real protocol handshake; never the capability token."),
+            "Attach result with the target descriptor path, the bound TCP port when --tcp-port was given, the transport (pipe or tcp) the closing handshake actually verified over, a real protocol handshake, and target.appDomainId/appDomainFriendlyName/appDomainSelectionWarning when AppDomain targeting applies; never the capability token."),
         Local(
             "schema",
             "Emit the machine-readable CLI command and response contract.",
@@ -401,7 +421,21 @@ internal static class CliContract
                 F("root", "string", false, "Registered WinForms root. Defaults to the only root when there is exactly one; required when the target has several."),
                 F("path", "string", false, "Projected control path within the root.")
             ],
-            "WinFormsScreenshot.")
+            "WinFormsScreenshot."),
+        Adapter(
+            "appdomain.list",
+            "List the AppDomains loaded in this .NET Framework process and which already host a Scry endpoint.",
+            [],
+            "{ domains: [{ id, friendlyName, isDefault, hasEndpoint, applicationBase, configurationFile, shadowCopyFiles }] }."),
+        Adapter(
+            "appdomain.start",
+            "Start a sibling Scry endpoint inside a chosen AppDomain of this same .NET Framework process.",
+            [
+                F("selector", "id|name|auto", true, "AppDomain to target: a numeric id, an exact or prefix match of its friendly name (an ASP.NET application's own id is a stable prefix across recycles), or 'auto' for the single non-default domain."),
+                F("alias", "string", false, "Alias for the new sibling endpoint. Defaults to '<this endpoint's alias>-appdomain-<id>'."),
+                F("tcpPort", "integer", false, "Starts a loopback TCP listener on the sibling, same semantics as 'scry attach --tcp-port'.")
+            ],
+            "{ targetId, alias, descriptorPath, appDomainId, appDomainFriendlyName }.")
     ];
 
     internal static bool IsEndpointOperation(string operation) =>
@@ -514,7 +548,7 @@ internal static class CliContract
                 """
                 Usage:
                   scry discover [--targets-dir <path>]
-                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>] [--targets-dir <path>]
+                  scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>] [--targets-dir <path>] [--appdomain <id|name|auto>]
                   scry schema
                   scry <command> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry jobs <start|status|wait|cancel|logs> (--target <id-or-alias> | --descriptor <path>) [options]
@@ -531,6 +565,7 @@ internal static class CliContract
                   Flows:      scenario, batch
                   WPF:        wpf.snapshot, wpf.wait, wpf.assert, wpf.screenshot
                   WinForms:   winforms.snapshot, winforms.wait, winforms.assert, winforms.screenshot
+                  AppDomain:  appdomain.list, appdomain.start (.NET Framework targets only)
                   Contract:   schema
 
                 Common target options:
@@ -567,6 +602,12 @@ internal static class CliContract
                 writable by the target's identity. The named pipe is owner-only, so cross-identity
                 verification always happens over TCP. See README.md, "Attaching to a service or IIS
                 application pool", for the full recipe.
+
+                Reaching an ASP.NET application's own assemblies (.NET Framework only): attaching
+                always lands in the process's default AppDomain, which for an IIS worker is not
+                where the hosted application's own types live - pass 'scry attach <pid> --appdomain
+                <id|name|auto>', or attach normally and use 'scry appdomain.list' /
+                'scry appdomain.start' afterward.
 
                 Exit codes: 0 success, 2 usage/JSON, 3 target, 4 connection/protocol,
                 5 target operation, 6 scenario partial failure, 70 unexpected CLI failure.

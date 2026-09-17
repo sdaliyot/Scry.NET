@@ -10,11 +10,26 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Scry.Tests" />
+    <!--
+      Scry.Injector.Payload orchestrates the AppDomain hop (enumerate, select, check binding
+      policy) using ClrAppDomains/AppDomainSelector/BindingRedirectComparison directly, rather than
+      duplicating that logic or exposing it as public API surface no other caller needs.
+    -->
+    <InternalsVisibleTo Include="Scry.Injector.Payload" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
     <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="$(BclAsyncInterfacesVersion)" />
     <PackageReference Include="System.Threading.Tasks.Extensions" Version="$(TasksExtensionsVersion)" />
+
+    <!--
+      Linked, not project-referenced: Scry.Runtime's AppDomain-hop path (AppDomainSelector's doc
+      comments explain why) needs the same pure binding-redirect comparison Scry.Injector uses
+      before it ever injects. A project reference to Scry.Injector would pull the whole
+      attach/injection surface into every embedding host that references Scry.Runtime; this keeps
+      the one file identical in both places without that cost.
+    -->
+    <Compile Include="..\Scry.Injector\BindingRedirectComparison.cs" Link="BindingRedirectComparison.cs" />
   </ItemGroup>
 
   <PropertyGroup>

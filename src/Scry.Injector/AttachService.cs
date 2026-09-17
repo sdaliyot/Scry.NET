@@ -29,6 +29,23 @@ public sealed class AttachOptions
     /// </summary>
     public string? TargetsDirectory { get; init; }
 
+    /// <summary>
+    /// Places the endpoint in a specific AppDomain of the target process instead of the default
+    /// one: an id (<see cref="System.AppDomain.Id"/>), a friendly name or a stable prefix of one (an
+    /// ASP.NET application's own id, for example, survives its domain's volatile trailing recycle
+    /// sequence), or <c>"auto"</c> - the single non-default domain when there is exactly one, else
+    /// the default. Null (the default) never attempts a hop. Only meaningful on .NET Framework, and
+    /// on modern .NET is silently ignored.
+    /// <para>
+    /// A selector that cannot be honoured - it matches zero or several domains, the domain's own
+    /// binding policy conflicts with the payload, or the hop itself fails - does not fail the
+    /// attach: the native injection that got this far cannot be retried without recycling the
+    /// target, so the endpoint starts in the default domain instead, and
+    /// <c>TargetMetadata.AppDomainSelectionWarning</c> says why.
+    /// </para>
+    /// </summary>
+    public string? AppDomain { get; init; }
+
     public string ComponentRoot { get; init; } = AppContext.BaseDirectory;
 
     public TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(15);
@@ -42,6 +59,7 @@ public static class AttachService
         string? adapters = null,
         int? tcpPort = null,
         string? targetsDirectory = null,
+        string? appDomain = null,
         CancellationToken cancellationToken = default) =>
         AttachAsync(
             ProcessTargetResolver.Resolve(target),
@@ -50,7 +68,8 @@ public static class AttachService
                 Alias = alias,
                 Adapters = adapters,
                 TcpPort = tcpPort,
-                TargetsDirectory = targetsDirectory
+                TargetsDirectory = targetsDirectory,
+                AppDomain = appDomain
             },
             cancellationToken);
 
@@ -101,7 +120,8 @@ public static class AttachService
                 selected.Alias,
                 selected.Adapters,
                 selected.TcpPort,
-                targetsDirectory);
+                targetsDirectory,
+                selected.AppDomain);
 
             using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutSource.CancelAfter(selected.StartupTimeout);

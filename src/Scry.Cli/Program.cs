@@ -215,7 +215,8 @@ internal static class Cli
                 parsed.Alias,
                 parsed.Adapters,
                 parsed.TcpPort,
-                parsed.TargetsDirectory)
+                parsed.TargetsDirectory,
+                parsed.AppDomain)
             .ConfigureAwait(false);
         if (!result.Success)
         {

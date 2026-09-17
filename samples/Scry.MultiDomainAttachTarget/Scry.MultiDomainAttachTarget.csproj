@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(ScryNetFrameworkTarget)</TargetFramework>
+    <AssemblyName>Scry.MultiDomainAttachTarget</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      A normal reference, so the plugin DLL is built and copied beside this exe - but nothing in
+      this project's own code names a type from it, so the assembly is never loaded into this
+      process's default AppDomain. Program.cs loads it, by path, only into the second AppDomain it
+      creates. That asymmetry is the entire point of this sample: it gives attach mode something to
+      target that a default-domain attach genuinely cannot see.
+    -->
+    <ProjectReference Include="..\Scry.MultiDomainAttachTarget.Plugin\Scry.MultiDomainAttachTarget.Plugin.csproj" />
+  </ItemGroup>
+
+</Project>

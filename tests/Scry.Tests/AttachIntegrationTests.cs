@@ -416,6 +416,174 @@ public sealed class AttachIntegrationTests
         }
     }
 
+    /// <summary>
+    /// The end-to-end proof for AppDomain targeting: <c>Scry.MultiDomainAttachTarget</c> carries a
+    /// second AppDomain ("PluginDomain") with a type loaded only there
+    /// (<c>Scry.MultiDomainAttachTarget.Plugin.PluginMarker</c>) and never referenced from the
+    /// default domain's own code. An ordinary attach must not see it; <c>--appdomain PluginDomain</c>
+    /// must land the endpoint there and see it. This is what actually proves the
+    /// <c>ICorRuntimeHost</c> COM declaration and the cross-domain hop work, rather than merely
+    /// that the attach call returned success.
+    /// </summary>
+    [Fact]
+    public async Task Attaching_with_appdomain_reaches_a_type_invisible_to_the_default_domain()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            ProcessInspector.CurrentArchitecture != TargetArchitecture.X64)
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var targetExe = Path.Combine(
+            root, "samples", "Scry.MultiDomainAttachTarget", "bin", "Release", "net472",
+            "Scry.MultiDomainAttachTarget.exe");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        Assert.True(File.Exists(targetExe), $"Multi-domain attach target is missing: {targetExe}");
+        Assert.True(
+            File.Exists(Path.Combine(
+                Path.GetDirectoryName(cliAssembly)!, "native", "win-x64", "Scry.Injector.Native.dll")),
+            "Build the native x64 helper before running the attach integration test.");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = targetExe,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start the multi-domain attach target.");
+
+        try
+        {
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var reportedProcessId = await process.StandardOutput.ReadLineAsync(startupTimeout.Token);
+            Assert.Equal(process.Id.ToString(), reportedProcessId);
+
+            var defaultAlias = $"mdtarget-default-{Guid.NewGuid():N}";
+            var defaultAttach = await RunCliAsync(
+                cliAssembly, $"attach {process.Id} --alias {defaultAlias}", input: null, TimeSpan.FromSeconds(30));
+            Assert.True(defaultAttach.ExitCode == 0, defaultAttach.StandardOutput + defaultAttach.StandardError);
+            using var defaultJson = JsonDocument.Parse(defaultAttach.StandardOutput);
+            Assert.False(
+                defaultJson.RootElement.GetProperty("handshake").GetProperty("target")
+                    .TryGetProperty("appDomainId", out _),
+                "An ordinary attach must not report an AppDomainId.");
+
+            var defaultFind = await RunCliAsync(
+                cliAssembly,
+                $"find-types --target {defaultAlias}",
+                """{"query":"PluginMarker"}""",
+                TimeSpan.FromSeconds(20));
+            Assert.True(defaultFind.ExitCode == 0, defaultFind.StandardOutput + defaultFind.StandardError);
+            using var defaultFindJson = JsonDocument.Parse(defaultFind.StandardOutput);
+            Assert.Empty(defaultFindJson.RootElement.GetProperty("result").GetProperty("types").EnumerateArray());
+
+            // appdomain.list / appdomain.start: reach the other domain from an endpoint that was
+            // never given --appdomain, without spending the process's one native injection again.
+            var listResult = await RunCliAsync(
+                cliAssembly, $"appdomain.list --target {defaultAlias}", "{}", TimeSpan.FromSeconds(20));
+            Assert.True(listResult.ExitCode == 0, listResult.StandardOutput + listResult.StandardError);
+            using var listJson = JsonDocument.Parse(listResult.StandardOutput);
+            var domains = listJson.RootElement.GetProperty("result").GetProperty("domains")
+                .EnumerateArray().ToArray();
+            Assert.Contains(domains, domain => domain.GetProperty("friendlyName").GetString() == "PluginDomain");
+
+            var startResult = await RunCliAsync(
+                cliAssembly,
+                $"appdomain.start --target {defaultAlias}",
+                """{"selector":"PluginDomain"}""",
+                TimeSpan.FromSeconds(20));
+            Assert.True(startResult.ExitCode == 0, startResult.StandardOutput + startResult.StandardError);
+            using var startJson = JsonDocument.Parse(startResult.StandardOutput);
+            var siblingAlias = startJson.RootElement.GetProperty("result").GetProperty("alias").GetString()!;
+            Assert.Equal(
+                2, startJson.RootElement.GetProperty("result").GetProperty("appDomainId").GetInt32());
+
+            var siblingFind = await RunCliAsync(
+                cliAssembly,
+                $"find-types --target {siblingAlias}",
+                """{"query":"PluginMarker"}""",
+                TimeSpan.FromSeconds(20));
+            Assert.True(siblingFind.ExitCode == 0, siblingFind.StandardOutput + siblingFind.StandardError);
+            using var siblingFindJson = JsonDocument.Parse(siblingFind.StandardOutput);
+            var siblingTypes = siblingFindJson.RootElement.GetProperty("result").GetProperty("types")
+                .EnumerateArray().ToArray();
+            Assert.Single(siblingTypes);
+            Assert.Equal(
+                "Scry.MultiDomainAttachTarget.Plugin.PluginMarker",
+                siblingTypes[0].GetProperty("fullName").GetString());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A selector that matches no AppDomain must not fail the attach - the native injection that
+    /// got this far cannot be retried without recycling the target - so it falls back to the
+    /// default domain and says why on <c>target.appDomainSelectionWarning</c>.
+    /// </summary>
+    [Fact]
+    public async Task An_unmatched_appdomain_selector_falls_back_to_the_default_domain_with_a_warning()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            ProcessInspector.CurrentArchitecture != TargetArchitecture.X64)
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var targetExe = Path.Combine(
+            root, "samples", "Scry.MultiDomainAttachTarget", "bin", "Release", "net472",
+            "Scry.MultiDomainAttachTarget.exe");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net9.0", "scry.dll");
+        Assert.True(File.Exists(targetExe), $"Multi-domain attach target is missing: {targetExe}");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = targetExe,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start the multi-domain attach target.");
+
+        try
+        {
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var reportedProcessId = await process.StandardOutput.ReadLineAsync(startupTimeout.Token);
+            Assert.Equal(process.Id.ToString(), reportedProcessId);
+
+            var alias = $"mdtarget-fallback-{Guid.NewGuid():N}";
+            var attached = await RunCliAsync(
+                cliAssembly,
+                $"attach {process.Id} --alias {alias} --appdomain NoSuchDomain",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            Assert.True(attached.ExitCode == 0, attached.StandardOutput + attached.StandardError);
+            using var attachJson = JsonDocument.Parse(attached.StandardOutput);
+            var target = attachJson.RootElement.GetProperty("handshake").GetProperty("target");
+            Assert.False(target.TryGetProperty("appDomainId", out _));
+            Assert.Contains(
+                "matched no AppDomain",
+                target.GetProperty("appDomainSelectionWarning").GetString());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
     private static async Task<CliResult> RunCliAsync(
         string cliAssembly,
         string arguments,

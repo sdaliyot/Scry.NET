@@ -36,7 +36,8 @@ internal static class InjectorCli
                 parsed.Alias,
                 parsed.Adapters,
                 parsed.TcpPort,
-                parsed.TargetsDirectory).ConfigureAwait(false);
+                parsed.TargetsDirectory,
+                parsed.AppDomain).ConfigureAwait(false);
             if (!result.Success)
             {
                 Write(result);

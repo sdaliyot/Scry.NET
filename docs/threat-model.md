@@ -143,11 +143,21 @@ Current, as of this document:
   into a leasable reference for a later `get`/`set`/`invoke`; only its `path` can be fed back into
   `wpf.wait`/`wpf.screenshot`. Bridging the projection model to the session handle table is a design
   change to the adapters, not a gap in the current one.
-- **No secondary AppDomains, no ARM64, no unload/detach.** The endpoint starts only in the default
-  AppDomain (or default CoreCLR load context) of a local process on Windows x86/x64. It can now be
-  *reached* from another machine through an operator-established port forward to its loopback TCP
-  listener (see "Remote transport" below), but the endpoint itself still only ever runs as a local
-  process - Scry.NET performs no remote injection and sets up no tunnel of its own.
+- **No ARM64, no unload/detach.** Injection is x86/x64 Windows only. It can now be *reached* from
+  another machine through an operator-established port forward to its loopback TCP listener (see
+  "Remote transport" below), but the endpoint itself still only ever runs as a local process -
+  Scry.NET performs no remote injection and sets up no tunnel of its own.
+- **AppDomain and load-context targeting differ by runtime, and neither is unlimited.** On .NET
+  Framework, injection still always lands in the default AppDomain, but `--appdomain` (attach-time)
+  and `appdomain.list`/`appdomain.start` (on a live endpoint) can place - or start a sibling in - any
+  other AppDomain of that same process, using `ICorRuntimeHost` COM interop rather than a native
+  change. Because the process's one native injection cannot be retried, a selector that cannot be
+  honoured falls back to the default domain rather than failing the attach; the failure is reported
+  on `target.appDomainSelectionWarning`, never silent. On modern .NET there are no secondary
+  AppDomains, and inspection already spans every `AssemblyLoadContext` - but `evaluate`/`execute`
+  bind only against the default context and the runtime's own, because the same type loaded twice
+  under CoreCLR is two distinct `Type` instances and a submission must not silently bind the wrong
+  one.
 - **No production packaging.** There is no NuGet publication and no signed release; building from
   source is the only supported path today.
 - **Fatal runtime failures bypass the protocol entirely.** Process termination, a stack overflow, or

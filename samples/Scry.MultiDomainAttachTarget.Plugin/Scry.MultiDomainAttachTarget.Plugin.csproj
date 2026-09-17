@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(ScryNetFrameworkTarget)</TargetFramework>
+    <AssemblyName>Scry.MultiDomainAttachTarget.Plugin</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

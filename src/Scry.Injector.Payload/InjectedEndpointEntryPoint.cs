@@ -39,9 +39,38 @@ public static class InjectedEndpointEntryPoint
         try
         {
             var configuration = ParseConfiguration(argument);
+            string? appDomainWarning = null;
+
+#if NETFRAMEWORK
+            // A requested AppDomain hop is tried before starting locally: if it succeeds, the
+            // endpoint now lives in that other domain and there is nothing more to do here. A
+            // selector that could not be honoured (matched none, matched several, or lost the
+            // hop itself) is not a hard failure - the native injection that got this far cannot be
+            // retried without recycling the target - so it falls through to the ordinary local
+            // start below, carrying the reason as a warning rather than silently succeeding.
+            if (!string.IsNullOrWhiteSpace(configuration.AppDomain) &&
+                AppDomainHop.TryHop(
+                    configuration.AppDomain!,
+                    configuration.Alias,
+                    configuration.TcpPort,
+                    configuration.TargetsDirectory,
+                    Path.GetDirectoryName(typeof(InjectedEndpointEntryPoint).Assembly.Location)!,
+                    out appDomainWarning))
+            {
+                return 0;
+            }
+#endif
+
             _host = EndpointHost.Start(
-                configure: builder => DesktopAdapterWiring.Apply(builder, configuration.Adapters),
-                options: BuildOptions(configuration));
+                configure: builder =>
+                {
+                    DesktopAdapterWiring.Apply(builder, configuration.Adapters);
+#if NETFRAMEWORK
+                    AppDomainOperationWiring.Apply(
+                        builder, () => _host!.Metadata, () => _host!.DescriptorPath);
+#endif
+                },
+                options: BuildOptions(configuration, appDomainWarning));
             return 0;
         }
         catch (Exception exception)
@@ -59,6 +88,7 @@ public static class InjectedEndpointEntryPoint
         string? adapters = null;
         int? tcpPort = null;
         string? targetsDirectory = null;
+        string? appDomain = null;
         foreach (var line in argument.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = line.IndexOf('=');
@@ -95,12 +125,17 @@ public static class InjectedEndpointEntryPoint
             {
                 targetsDirectory = value;
             }
+            else if (name.Equals("appdomain", StringComparison.OrdinalIgnoreCase))
+            {
+                appDomain = value;
+            }
         }
 
-        return new(alias, errorPath, adapters, tcpPort, targetsDirectory);
+        return new(alias, errorPath, adapters, tcpPort, targetsDirectory, appDomain);
     }
 
-    private static EndpointOptions BuildOptions(BootstrapConfiguration configuration) =>
+    private static EndpointOptions BuildOptions(
+        BootstrapConfiguration configuration, string? appDomainSelectionWarning) =>
         // EndpointOptions is a plain class (no "with" support), and its Alias property already
         // supplies its own default when left unset, so the branch is only on which initializer to
         // use - every other field is threaded through unconditionally on both.
@@ -108,13 +143,15 @@ public static class InjectedEndpointEntryPoint
             ? new EndpointOptions
             {
                 TcpPort = configuration.TcpPort,
-                TargetsDirectory = configuration.TargetsDirectory
+                TargetsDirectory = configuration.TargetsDirectory,
+                AppDomainSelectionWarning = appDomainSelectionWarning
             }
             : new EndpointOptions
             {
                 Alias = configuration.Alias,
                 TcpPort = configuration.TcpPort,
-                TargetsDirectory = configuration.TargetsDirectory
+                TargetsDirectory = configuration.TargetsDirectory,
+                AppDomainSelectionWarning = appDomainSelectionWarning
             };
 
     private static string? Decode(string encoded)
@@ -166,5 +203,6 @@ public static class InjectedEndpointEntryPoint
         string? ErrorPath,
         string? Adapters,
         int? TcpPort = null,
-        string? TargetsDirectory = null);
+        string? TargetsDirectory = null,
+        string? AppDomain = null);
 }

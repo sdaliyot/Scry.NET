@@ -12,7 +12,7 @@ public static class AttachCommandLine
 
     public const string Usage =
         "<pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>] " +
-        "[--targets-dir <path>]";
+        "[--targets-dir <path>] [--appdomain <id|name|auto>]";
 
     public static AttachArguments Parse(string[] args)
     {
@@ -25,6 +25,7 @@ public static class AttachCommandLine
         string? adapters = null;
         int? tcpPort = null;
         string? targetsDirectory = null;
+        string? appDomain = null;
         for (var index = 1; index < args.Length; index++)
         {
             switch (args[index])
@@ -65,12 +66,20 @@ public static class AttachCommandLine
 
                     targetsDirectory = rawDirectory;
                     break;
+                case "--appdomain":
+                    appDomain = RequireValue(args, ref index, "--appdomain");
+                    if (string.IsNullOrWhiteSpace(appDomain))
+                    {
+                        throw new AttachUsageException("--appdomain requires a non-empty value.");
+                    }
+
+                    break;
                 default:
                     throw new AttachUsageException($"Unknown attach option '{args[index]}'.");
             }
         }
 
-        return new(args[0], alias, adapters, tcpPort, targetsDirectory);
+        return new(args[0], alias, adapters, tcpPort, targetsDirectory, appDomain);
     }
 
     private static string RequireValue(string[] args, ref int index, string option)
@@ -89,6 +98,7 @@ public sealed record AttachArguments(
     string? Alias,
     string? Adapters,
     int? TcpPort = null,
-    string? TargetsDirectory = null);
+    string? TargetsDirectory = null,
+    string? AppDomain = null);
 
 public sealed class AttachUsageException(string message) : Exception(message);

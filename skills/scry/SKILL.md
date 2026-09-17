@@ -822,6 +822,24 @@ it, grant access once with `icacls <path> /grant "<target identity>":(OI)(CI)M`;
 modifies permissions itself. See
 [`README.md`, "Attaching to a service or IIS application pool"](../../README.md#attaching-to-a-service-or-iis-application-pool).
 
+## Reaching a chosen AppDomain (.NET Framework)
+
+Injection always lands in the target's default AppDomain, which for a host like IIS is not where
+the hosted application's own code runs - an ordinary attach there can confirm the process is alive
+and nothing about the application inside it. Use `scry attach <pid> --appdomain <id|name|auto>` to
+place the endpoint in a specific AppDomain instead, or attach normally and reach another domain
+afterward with `scry appdomain.list --target <alias> --request '{}'` then
+`scry appdomain.start --target <alias> --request '{"selector":"<selector>"}'` - the latter is
+strictly better once an endpoint already exists, since a bad `--appdomain` selector at attach time
+falls back to the default domain rather than failing (the process gets exactly one native
+injection, so a failed attach cannot simply be retried), while `appdomain.start` fails cleanly on
+a selector that matches zero or several domains. A selector may be a numeric id, an exact
+`FriendlyName`, or a *prefix* of one - the way to name an ASP.NET application stably, since its
+domain's `FriendlyName` carries a volatile trailing sequence that changes on recycle but its
+leading application id does not. Both `--appdomain` and `appdomain.*` are .NET Framework only;
+there is nothing to select on a modern .NET target. See
+[`README.md`, "Reaching a chosen AppDomain"](../../README.md#reaching-a-chosen-appdomain).
+
 ## Structured error recovery
 
 Use the error code before the message:

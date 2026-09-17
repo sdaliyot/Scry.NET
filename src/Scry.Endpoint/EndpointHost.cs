@@ -72,6 +72,12 @@ public sealed class EndpointOptions
     public string? TargetsDirectory { get; init; }
 
     /// <summary>
+    /// Surfaced verbatim on <see cref="Scry.Contracts.TargetMetadata.AppDomainSelectionWarning"/>.
+    /// See <see cref="Scry.Runtime.RuntimeHostOptions.AppDomainSelectionWarning"/>.
+    /// </summary>
+    public string? AppDomainSelectionWarning { get; init; }
+
+    /// <summary>
     /// Starts a loopback TCP listener alongside the named pipe when set: null (the default) starts
     /// no listener, 0 binds an OS-assigned free port, and 1-65535 binds that fixed port. See
     /// <see cref="Scry.Runtime.RuntimeHostOptions.TcpPort"/> for the trust-boundary implications.
@@ -399,7 +405,8 @@ public sealed class EndpointHost : IAsyncDisposable, IDisposable
                 AuditDirectory = selected.AuditDirectory,
                 AuditCallback = selected.AuditCallback,
                 TcpPort = selected.TcpPort,
-                TargetsDirectory = selected.TargetsDirectory
+                TargetsDirectory = selected.TargetsDirectory,
+                AppDomainSelectionWarning = selected.AppDomainSelectionWarning
             });
         return new(runtime, builder.Registrations);
     }

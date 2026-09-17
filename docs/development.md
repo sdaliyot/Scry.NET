@@ -251,7 +251,13 @@ default AppDomain, under the target's binding policy, and the payload's `Assembl
 cannot recover: a redirect is applied *before* that event fires, and the event only runs when a bind
 fails, not when it succeeds against the wrong version. The check is driven off the staged payload's
 real assembly versions rather than a fixed list, and is deliberately permissive about anything it
-cannot parse.
+cannot parse. The same check runs again, against the *chosen* domain's own configuration file, when
+`--appdomain` or `appdomain.start` hops the endpoint into a non-default AppDomain - that domain's
+binding policy is not necessarily the same file (an ASP.NET application domain's is its own
+`web.config`, not the process's `.exe.config`). The comparison itself
+(`BindingRedirectComparison.FindConflict`) is a linked source file shared between `Scry.Injector`
+and `Scry.Runtime` rather than a project reference, so `Scry.Runtime` does not have to pull in the
+whole attach/injection surface to reuse it.
 
 ### Desktop adapters in an attached target
 
@@ -281,9 +287,22 @@ Attach mode is local, invasive tooling for development and testing. It requires 
 
 Current limits:
 
-- The endpoint starts only in the default AppDomain/default CoreCLR load context.
+- Injection itself always lands in the target's default AppDomain. On .NET Framework the endpoint
+  can then be placed in - or a sibling started in - any other AppDomain of that process
+  (`--appdomain <id|name|auto>` at attach time; `appdomain.list`/`appdomain.start` on a live
+  endpoint), using `ICorRuntimeHost` COM interop (`Scry.Runtime.ClrAppDomains`), not a native
+  change. A selector matching zero or several domains does not fail the attach - the one native
+  injection cannot be retried - it falls back to the default domain and reports why on
+  `target.appDomainSelectionWarning`.
+- On modern .NET there is one AppDomain, but several `AssemblyLoadContext`s: `list-assemblies`,
+  `find-types` and `describe-type` already see every context, but `evaluate`/`execute` bind only
+  against the default context and the runtime's own, to keep runtime type identity from silently
+  diverging between two loads of the same assembly.
 - Supported targets are .NET Framework 4.7.2 (or later 4.x) and .NET 9 on Windows x86/x64, both verified end to end on both CLR families.
-- Secondary AppDomains, ARM64, cross-architecture injection, remote machines, unload/detach, and production packaging are not implemented.
+- ARM64, cross-architecture injection, and production packaging are not implemented. Reaching an
+  endpoint on another machine is supported through an operator-established loopback TCP listener
+  and port forward (`--tcp-port`), not through remote injection - see README.md, "Reaching an
+  endpoint on another machine."
 - Runtime detection requires the managed runtime to be loaded before attach.
 - Native dependency resolution and host policy can still be constrained by target-specific mitigations or hosting models; failures are reported rather than falling back to an unsafe runtime start.
 
@@ -505,7 +524,7 @@ scry jobs wait --target my-test-target --request job-wait.json
 
 Scenario output is a `ScenarioResult` containing `protocolVersion`, normalized `mode`, aggregate `success`, and ordered `results`. Every item preserves its command ID, index, operation, selector, resolved target metadata when available, and either the target's `ProtocolResponse` or a CLI-side `ProtocolError`. A scenario exits `0` only when every command succeeds and `6` when any command fails; individual commands retain the existing exit codes.
 
-Generated Roslyn script assemblies and assemblies loaded into the .NET Framework default AppDomain cannot be unloaded independently. They remain until the host process exits. Scry does not create, marshal across, or unload child AppDomains in the net472 implementation.
+Generated Roslyn script assemblies and assemblies loaded into a .NET Framework AppDomain cannot be unloaded independently of that domain - they remain until the domain unloads or the host process exits. Scry.NET does create and marshal into a non-default AppDomain on .NET Framework, deliberately (see "AppDomain targeting" above and `docs/threat-model.md`), through `ICorRuntimeHost` COM interop rather than the native bootstrap; `RuntimeHost` hooks `AppDomain.DomainUnload` in addition to `ProcessExit` so an endpoint's descriptor is cleaned up if its own (non-default) domain unloads without the process exiting. There is still no unload/detach of an individual endpoint short of that.
 
 ## Validation
 

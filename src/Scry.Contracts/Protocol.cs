@@ -250,6 +250,30 @@ public sealed record TargetMetadata(
     DateTimeOffset StartedAt)
 {
     public IReadOnlyList<string>? Aliases { get; init; }
+
+    /// <summary>
+    /// The <see cref="AppDomain.Id"/> this endpoint actually runs in, or null for the process's
+    /// default AppDomain - which is every endpoint before AppDomain targeting existed, so a
+    /// descriptor predating this field stays byte-identical (<see cref="ScryJson.Options"/> omits
+    /// null members on write). Set only on .NET Framework, where more than one AppDomain can exist
+    /// in a process; always null on modern .NET.
+    /// </summary>
+    public int? AppDomainId { get; init; }
+
+    /// <summary>
+    /// The <see cref="AppDomain.FriendlyName"/> this endpoint actually runs in. Null exactly when
+    /// <see cref="AppDomainId"/> is null, for the same reason.
+    /// </summary>
+    public string? AppDomainFriendlyName { get; init; }
+
+    /// <summary>
+    /// Set only when an attach-time <c>--appdomain</c> selector could not be honoured - it matched
+    /// zero or several AppDomains, or the chosen domain's own binding policy conflicted with the
+    /// payload - and the endpoint was started in the default AppDomain instead of failing the
+    /// attach outright (the native injection that got this far cannot be retried without recycling
+    /// the target). Null on every ordinary attach and on every embedded host.
+    /// </summary>
+    public string? AppDomainSelectionWarning { get; init; }
 }
 
 /// <param name="TcpAddress">
@@ -299,9 +323,14 @@ public static class ScryTransports
 /// publish - this is what a caller supplies to reach that listener through a port forward, which
 /// may not be the same port the endpoint itself bound.
 /// <para>
-/// Restricted to loopback hosts by construction and by <see cref="Parse"/>, so "the cleartext
-/// capability token never crosses a network" holds on the client side too, not only at the
-/// listener.
+/// Restricted to loopback hosts by construction and by <see cref="Parse"/> - on the client side,
+/// matching the listener, which binds loopback only. That restriction keeps Scry.NET itself off
+/// the network and forces a caller to explicitly choose and own the mechanism that bridges the
+/// last hop (a port forward such as <c>ssh -L</c> or <c>netsh interface portproxy</c>); it does
+/// not by itself make the token confidential in transit - an unencrypted forward such as
+/// <c>netsh portproxy</c> still carries it in cleartext across whatever network that forward
+/// spans. Prefer an encrypted forward (<c>ssh -L</c>) whenever the two loopback endpoints are not
+/// the same machine.
 /// </para>
 /// </summary>
 public sealed record ScryEndpointAddress(string Host, int Port)

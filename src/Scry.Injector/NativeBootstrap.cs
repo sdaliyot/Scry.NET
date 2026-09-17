@@ -38,7 +38,8 @@ internal static class NativeBootstrap
         string? alias,
         string? adapters,
         int? tcpPort = null,
-        string? targetsDirectory = null)
+        string? targetsDirectory = null,
+        string? appDomain = null)
     {
         var access = ProcessCreateThread |
             ProcessQueryInformation |
@@ -87,6 +88,7 @@ internal static class NativeBootstrap
                 adapters,
                 tcpPort,
                 resolvedTargetsDirectory,
+                appDomain,
                 hostFxrPath,
                 statusPath,
                 statusPath + ".managed");
@@ -241,6 +243,7 @@ internal static class NativeBootstrap
         string? adapters,
         int? tcpPort,
         string targetsDirectory,
+        string? appDomain,
         string? hostFxrPath,
         string statusPath,
         string managedErrorPath)
@@ -285,6 +288,12 @@ internal static class NativeBootstrap
             argumentLines.Add(
                 "tcpPort=" + Convert.ToBase64String(
                     Encoding.UTF8.GetBytes(port.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        }
+
+        if (!string.IsNullOrWhiteSpace(appDomain))
+        {
+            argumentLines.Add(
+                "appdomain=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(appDomain)));
         }
 
         // Always sent, not only when the caller overrode it: this is what makes RuntimeHost publish
