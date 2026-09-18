@@ -26,6 +26,13 @@
     <AssemblyName>scry-injector</AssemblyName>
     <PackageId>Scry.Injector</PackageId>
     <Description>Windows attach-mode injector for Scry.NET.</Description>
+    <!--
+      Not published to NuGet: AttachService.ComponentRoot defaults to AppContext.BaseDirectory, so an
+      external consumer's own output directory would need the payload/native folders copied in too -
+      a NuGet .targets content-copy step this package doesn't have yet. Distributed instead as part
+      of the self-contained scry CLI on GitHub Releases, which already stages everything correctly.
+    -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,0 +1,11 @@
+{
+  "name": "scry",
+  "description": "Inspect, validate, and deliberately mutate a running .NET process - attach to one that has never heard of Scry.NET, or embed an endpoint in your own - through the scry JSON CLI.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Shahar Daliyot"
+  },
+  "homepage": "https://github.com/sdaliyot/Scry.NET",
+  "repository": "https://github.com/sdaliyot/Scry.NET",
+  "license": "MIT"
+}

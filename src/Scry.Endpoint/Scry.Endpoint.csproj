@@ -9,6 +9,8 @@
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.Endpoint</PackageId>
     <Description>In-process endpoint hosting for Scry.NET, started by the target application in embedded mode or by an injected payload in attach mode.</Description>
+    <!-- Not published to NuGet in this round; embedded mode is build-from-source for now. -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">

@@ -8,6 +8,8 @@
     <TargetFrameworks>$(ScryDesktopTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.WinForms</PackageId>
     <Description>Optional Windows Forms inspection adapter for Scry.NET.</Description>
+    <!-- Not published to NuGet in this round; embedded mode is build-from-source for now. -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <!-- See Scry.Wpf.csproj: UseWindowsForms is modern-only, the desktop CLR uses plain references. -->

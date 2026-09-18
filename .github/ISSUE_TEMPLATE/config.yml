@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/sdaliyot/Scry.NET/security/advisories/new
+    about: Report privately - see SECURITY.md. Do not open a public issue for this.
+  - name: Questions and discussion
+    url: https://github.com/sdaliyot/Scry.NET/discussions
+    about: General usage questions that aren't a specific bug.

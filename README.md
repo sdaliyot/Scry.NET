@@ -1,5 +1,7 @@
 # Scry.NET
 
+**A must-have tool for .NET development in the AI era!**
+
 **Scry.NET gives your .NET application what the DevTools protocol gives a web or Node.js app:
 a live, external handle on a process that is already running - built for the two things people
 actually need one for. AI agents that must check their own work against the real application
@@ -164,19 +166,35 @@ anything the other cannot.
 
 ## Getting started
 
-Packaging is not done yet. For now, build from source and run the CLI out of the repository -
-[`docs/development.md`](docs/development.md) has the full build, including the native helper that
-attach mode requires.
+There are two independent install paths, matching the two things people use Scry.NET for.
 
-When packaging lands there will be two routes: a NuGet package for test projects that reference
-`Scry.Client` and `Scry.Injector` directly, and a plugin install for agents that want the Skill.
-Until then, examples written as `scry ...` assume the built CLI is on your `PATH`; from a clone,
-`dotnet run --project src\Scry.Cli -- ...` is the equivalent.
+**The `scry` CLI, for AI agents and anyone driving attach mode from the command line.** Download the
+self-contained build for your architecture from the [latest
+release](https://github.com/sdaliyot/Scry.NET/releases/latest) - `scry-win-x64.zip` or
+`scry-win-x86.zip` - and unzip it. `scry.exe` needs no separate .NET runtime install; it's
+self-contained. Examples in this README written as `scry ...` assume it's on your `PATH` or invoked
+by full path. (Building from source and running `dotnet publish src\Scry.Cli` produces the same
+attach-capable layout - see [`docs/development.md`](docs/development.md) - but the release zip is the
+no-build path.) Unsigned binaries: see the note in the release description about Windows
+SmartScreen/antivirus warnings on first run.
 
-`dotnet publish src\Scry.Cli` produces an attach-capable CLI (the native helper and the injection
-payload are staged into the publish output). `dotnet pack`/`PackAsTool` does not yet - the packed
-tool can reach a target only through `--descriptor`/`--target` against an endpoint someone else
-attached, not perform `scry attach` itself - so prefer `dotnet publish` until packaging is finished.
+**NuGet, for test projects that connect to an endpoint.** `Scry.Contracts` and `Scry.Client` are
+published to nuget.org for both .NET 8+ and .NET Framework 4.6.2+:
+```powershell
+dotnet add package Scry.Client
+```
+This gets you `ScryClient`, `ExecutionRequest`, and everything needed to connect to and drive an
+endpoint someone else attached or embedded - it does not perform attach itself. A test that needs to
+*attach* shells out to the downloaded `scry` CLI first (exactly what this repo's own attach tests do),
+then uses `ScryClient` to drive the result. `Scry.Injector`/`Scry.Runtime`/`Scry.Endpoint`/`Scry.Wpf`/
+`Scry.WinForms` (attach internals and embedded-mode hosting) aren't on NuGet yet - build from source
+for those, per `docs/development.md`.
+
+**Using Scry.NET with other AI agents.** Claude Code users can install the Skill directly:
+`/plugin marketplace add sdaliyot/Scry.NET` then `/plugin install scry@scry-plugins` - this expects
+the `scry` CLI already installed per above. Codex and GitHub Copilot have no equivalent shared Skill
+format; paste [`skills/scry/SKILL.md`](skills/scry/SKILL.md)'s content into Codex's `AGENTS.md` or
+Copilot's custom instructions after installing the CLI the same way.
 
 ## Architecture
 
@@ -667,7 +685,7 @@ Scry.NET permits deliberate code execution and state mutation inside the target.
 
 Attach mode is intentionally restricted to processes running at the same or a lower Windows integrity level and requires an injector with the same architecture as the target. It inspects process architecture and loaded CLR modules before writing target memory, refuses unknown/ambiguous runtimes, and reports structured failures for access, loader, bootstrap, duplicate-injection, and likely antivirus/EDR blocking. Injecting code can destabilize the target and commonly triggers endpoint-security controls; use it only on applications and machines you are authorized to test.
 
-Current attach limits are: x86 and x64 only, .NET Framework 4.6.2+ and .NET 8+ only, no ARM64, and no production packaging. Injection itself always lands in the target's default AppDomain, but on .NET Framework the endpoint can then be placed in - or a sibling started in - any other AppDomain of that same process (`--appdomain`, `appdomain.list`/`appdomain.start`; see "Reaching a chosen AppDomain" below). On modern .NET, inspection (`list-assemblies`, `find-types`, `describe-type`) already spans every `AssemblyLoadContext`; execution (`evaluate`/`execute`) binds the default context and the runtime's own by default, and can additionally bind a chosen context by naming it in the execution request's `loadContext` field (e.g. one created by `load-assembly --loadPolicy isolated`) - this widens the eligible reference set rather than replacing it, and is rejected on .NET Framework, which has no load contexts.
+Current attach limits are: x86 and x64 only, .NET Framework 4.6.2+ and .NET 8+ only, no ARM64. Injection itself always lands in the target's default AppDomain, but on .NET Framework the endpoint can then be placed in - or a sibling started in - any other AppDomain of that same process (`--appdomain`, `appdomain.list`/`appdomain.start`; see "Reaching a chosen AppDomain" below). On modern .NET, inspection (`list-assemblies`, `find-types`, `describe-type`) already spans every `AssemblyLoadContext`; execution (`evaluate`/`execute`) binds the default context and the runtime's own by default, and can additionally bind a chosen context by naming it in the execution request's `loadContext` field (e.g. one created by `load-assembly --loadPolicy isolated`) - this widens the eligible reference set rather than replacing it, and is rejected on .NET Framework, which has no load contexts.
 
 ## Build and test
 

@@ -36,6 +36,8 @@
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.Runtime</PackageId>
     <Description>In-process Scry.NET endpoint runtime.</Description>
+    <!-- Not published to NuGet in this round; embedded mode is build-from-source for now. -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
 </Project>

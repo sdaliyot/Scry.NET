@@ -161,8 +161,10 @@ Current, as of this document:
   identity stays correct because the loader registers that context's live assemblies directly rather
   than re-resolving them by path. `loadContext` is additive only - it never narrows the default set -
   and is rejected on .NET Framework, which has no load contexts to select.
-- **No production packaging.** There is no NuGet publication and no signed release; building from
-  source is the only supported path today.
+- **Released binaries are unsigned.** `Scry.Contracts`/`Scry.Client` are published to nuget.org, and
+  the `scry` CLI ships as a self-contained GitHub Release, but no Authenticode signature exists yet -
+  Windows SmartScreen and antivirus/EDR may warn on first run of the downloaded CLI, on top of the
+  injection-specific detections already discussed above.
 - **Fatal runtime failures bypass the protocol entirely.** Process termination, a stack overflow, or
   a fail-fast in the target crosses no boundary cleanly - the connection simply ends. This is a
   property of the CLR, not something an in-process endpoint can intercept.
@@ -212,6 +214,10 @@ after use. There is no revocation mechanism short of restarting the endpoint.
 
 ## Reporting
 
-Scry.NET has no dedicated security contact or disclosure process at this time; it is local-only
-tooling, not a deployed service. If that changes with packaging, this section should be updated
-before publication.
+Report a suspected vulnerability privately through GitHub's [private vulnerability
+reporting](https://github.com/sdaliyot/Scry.NET/security/advisories/new) ("Security" tab -> "Report a
+vulnerability") rather than a public issue. See [`SECURITY.md`](../SECURITY.md) for the full policy.
+This is still local-only tooling, not a deployed service - most of what a "vulnerability" would mean
+for a running server (remote unauthenticated access, privilege escalation over a network) doesn't
+apply here in the way it would there, but the private channel exists for anything that does, including
+issues in the packaged binaries themselves.

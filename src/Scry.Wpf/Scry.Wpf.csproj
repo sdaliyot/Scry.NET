@@ -8,6 +8,8 @@
     <TargetFrameworks>$(ScryDesktopTargetFrameworks)</TargetFrameworks>
     <PackageId>Scry.Wpf</PackageId>
     <Description>Optional WPF inspection adapter for Scry.NET.</Description>
+    <!-- Not published to NuGet in this round; embedded mode is build-from-source for now. -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <!-- UseWPF is a .NET Core 3.0+ concept backed by the Microsoft.WindowsDesktop.App.WPF framework

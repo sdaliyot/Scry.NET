@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in Scry.NET isn't behaving as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill in every field below. "Not working" with no detail will get closed and asked to
+        be resubmitted with this information - it isn't actionable without it.
+
+  - type: input
+    id: version
+    attributes:
+      label: Scry.NET version or commit
+      description: The release tag (e.g. v0.1.0) or, if built from source, the commit hash.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: target-runtime
+    attributes:
+      label: Target runtime
+      description: The runtime of the process you attached to or embedded Scry.NET in.
+      options:
+        - .NET Framework (4.6.2+)
+        - Modern .NET (8+)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Attach
+        - Embedded
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command or request
+      description: The exact `scry ...` invocation, or the exact JSON request, that produced the problem.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the full error output/JSON error envelope, not a paraphrase.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal target application, if the problem depends on one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Additional logs or context
+      render: shell
+    validations:
+      required: false

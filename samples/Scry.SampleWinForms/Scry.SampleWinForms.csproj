@@ -9,6 +9,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>$(ScryModernWindowsTargetFramework)</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
 </Project>

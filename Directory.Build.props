@@ -35,6 +35,15 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Authors>Shahar Daliyot</Authors>
     <Copyright>Copyright (c) 2026 Shahar Daliyot</Copyright>
+    <!--
+      0.1.0: the first published version, deliberately pre-1.0 - packaging itself is new, and this
+      leaves room to adjust before committing to 1.0 compatibility semantics.
+    -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <RepositoryUrl>https://github.com/sdaliyot/Scry.NET</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/sdaliyot/Scry.NET</PackageProjectUrl>
+    <PackageTags>dotnet;testing;automation;attach;debugging;ai-agent</PackageTags>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">

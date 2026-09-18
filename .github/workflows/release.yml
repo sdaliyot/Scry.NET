@@ -1,0 +1,88 @@
+# Publishes Scry.Contracts/Scry.Client to nuget.org via NuGet Trusted Publishing (OIDC - no stored
+# API key; see nuget.org's Trusted Publishing docs) and builds self-contained scry CLI bundles for
+# win-x64/win-x86 as GitHub Release assets. Triggered by pushing a `v*` tag, e.g. `v0.1.0`.
+#
+# One-time setup this workflow depends on (not done by this file):
+#   - Register a NuGet Trusted Publishing policy at nuget.org (account -> Trusted Publishing):
+#     Repository Owner "sdaliyot", Repository "Scry.NET", Workflow File "release.yml".
+#   - See ci.yml's feasibility notes for the same windows-latest/native-toolchain assumptions this
+#     workflow shares.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write # to create the GitHub Release and upload assets
+      id-token: write # to mint a short-lived NuGet API key via Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Compute package version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build native bootstrap DLL (both architectures)
+        shell: pwsh
+        run: .\build-native.ps1 -Architecture all
+
+      - name: dotnet build Scry.sln -c Release
+        run: dotnet build Scry.sln -c Release -p:RequireNativeInjector=true --nologo
+
+      - name: Run the full validation matrix
+        shell: pwsh
+        run: .\validate.ps1
+
+      - name: Pack Scry.Contracts and Scry.Client
+        run: |
+          dotnet pack src\Scry.Contracts\Scry.Contracts.csproj -c Release --no-build -p:PackageVersion=${{ steps.version.outputs.version }} -o artifacts\packages
+          dotnet pack src\Scry.Client\Scry.Client.csproj -c Release --no-build -p:PackageVersion=${{ steps.version.outputs.version }} -o artifacts\packages
+
+      - name: NuGet login (Trusted Publishing -> short-lived API key)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: sdaliyot
+
+      - name: Push packages to nuget.org
+        run: dotnet nuget push "artifacts\packages\*.nupkg" --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Publish self-contained CLI (win-x64)
+        run: dotnet publish src\Scry.Cli -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -o artifacts\scry-win-x64
+
+      - name: Publish self-contained CLI (win-x86)
+        run: dotnet publish src\Scry.Cli -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -o artifacts\scry-win-x86
+
+      - name: Bundle release zips
+        shell: pwsh
+        run: |
+          foreach ($arch in "win-x64", "win-x86") {
+              $dir = "artifacts\scry-$arch"
+              Copy-Item README.md, LICENSE -Destination $dir
+              Copy-Item skills\scry\SKILL.md -Destination $dir
+              Compress-Archive -Path "$dir\*" -DestinationPath "artifacts\scry-$arch.zip"
+          }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/scry-win-x64.zip
+            artifacts/scry-win-x86.zip
+          generate_release_notes: true
+          body: |
+            Unsigned self-contained binaries - no .NET runtime install required, but Windows
+            SmartScreen and antivirus/EDR may warn on first run. Expected for an unsigned executable
+            that performs process injection by design; see `docs/threat-model.md`.

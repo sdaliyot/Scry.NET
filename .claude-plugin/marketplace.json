@@ -1,0 +1,14 @@
+{
+  "name": "scry-plugins",
+  "owner": {
+    "name": "Shahar Daliyot"
+  },
+  "plugins": [
+    {
+      "name": "scry",
+      "source": "./",
+      "description": "Inspect, validate, and deliberately mutate a running .NET process through the scry JSON CLI. Requires the scry CLI - see README.md for install instructions.",
+      "version": "0.1.0"
+    }
+  ]
+}

@@ -265,7 +265,11 @@ dotnet publish srcScry.Injector -c Release -f net8.0 -r win-x86 --self-contained
 ```
 
 It is framework-dependent, so the x86 .NET runtime must be installed. Attaching with a mismatched
-injector fails with `architecture_mismatch` before anything is written into the target.
+injector fails with `architecture_mismatch` before anything is written into the target. For a
+no-build, no-runtime-prerequisite option, the GitHub Release `scry-win-x86.zip`/`scry-win-x64.zip`
+bundles are self-contained builds of `Scry.Cli` (which references `Scry.Injector` and does everything
+this standalone injector does, plus `evaluate`/`execute`/etc.) per architecture - see README.md,
+"Getting started".
 
 Build the native helper before the managed build, and use `-p:RequireNativeInjector=true` for
 Release and CI so a forgotten native build fails the build instead of silently producing a CLI that
@@ -337,10 +341,9 @@ Current limits:
   preferred over the default context's. `loadContext` is rejected outright on .NET Framework, which
   has no load contexts at all.
 - Supported targets are .NET Framework 4.6.2 (or later 4.x) and .NET 8 (or later) on Windows x86/x64, both verified end to end on both CLR families.
-- ARM64, cross-architecture injection, and production packaging are not implemented. Reaching an
-  endpoint on another machine is supported through an operator-established loopback TCP listener
-  and port forward (`--tcp-port`), not through remote injection - see README.md, "Reaching an
-  endpoint on another machine."
+- ARM64 and cross-architecture injection are not implemented. Reaching an endpoint on another machine
+  is supported through an operator-established loopback TCP listener and port forward (`--tcp-port`),
+  not through remote injection - see README.md, "Reaching an endpoint on another machine."
 - Runtime detection requires the managed runtime to be loaded before attach.
 - Native dependency resolution and host policy can still be constrained by target-specific mitigations or hosting models; failures are reported rather than falling back to an unsafe runtime start.
 
