@@ -1,4 +1,4 @@
-# Publishes Scry.Contracts/Scry.Client to nuget.org via NuGet Trusted Publishing (OIDC - no stored
+# Publishes Scry.Net.Contracts/Scry.Net.Client to nuget.org via NuGet Trusted Publishing (OIDC - no stored
 # API key; see nuget.org's Trusted Publishing docs) and builds self-contained scry CLI bundles for
 # win-x64/win-x86 as GitHub Release assets. Triggered by pushing a `v*` tag, e.g. `v0.1.0`.
 #
@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: .\validate.ps1
 
-      - name: Pack Scry.Contracts and Scry.Client
+      - name: Pack Scry.Net.Contracts and Scry.Net.Client
         run: |
           dotnet pack src\Scry.Contracts\Scry.Contracts.csproj -c Release --no-build -p:PackageVersion=${{ steps.version.outputs.version }} -o artifacts\packages
           dotnet pack src\Scry.Client\Scry.Client.csproj -c Release --no-build -p:PackageVersion=${{ steps.version.outputs.version }} -o artifacts\packages
@@ -57,7 +57,9 @@ jobs:
           user: sdaliyot
 
       - name: Push packages to nuget.org
-        run: dotnet nuget push "artifacts\packages\*.nupkg" --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: |
+          dotnet nuget push "artifacts\packages\Scry.Net.Contracts.*.nupkg" --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "artifacts\packages\Scry.Net.Client.*.nupkg" --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Publish self-contained CLI (win-x64)
         run: dotnet publish src\Scry.Cli -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -o artifacts\scry-win-x64

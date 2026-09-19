@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
     The client deliberately references only Scry.Contracts. It talks to an endpoint over a
@@ -12,7 +12,7 @@
 
   <PropertyGroup>
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
-    <PackageId>Scry.Client</PackageId>
+    <PackageId>Scry.Net.Client</PackageId>
     <Description>Client for connecting to a Scry.NET endpoint.</Description>
   </PropertyGroup>
 

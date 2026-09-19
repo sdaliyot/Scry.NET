@@ -1,8 +1,8 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>$(ScryLibraryTargetFrameworks)</TargetFrameworks>
-    <PackageId>Scry.Contracts</PackageId>
+    <PackageId>Scry.Net.Contracts</PackageId>
     <Description>Versioned contracts and transport primitives for Scry.NET.</Description>
   </PropertyGroup>
 

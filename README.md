@@ -178,10 +178,10 @@ attach-capable layout - see [`docs/development.md`](docs/development.md) - but t
 no-build path.) Unsigned binaries: see the note in the release description about Windows
 SmartScreen/antivirus warnings on first run.
 
-**NuGet, for test projects that connect to an endpoint.** `Scry.Contracts` and `Scry.Client` are
+**NuGet, for test projects that connect to an endpoint.** `Scry.Net.Contracts` and `Scry.Net.Client` are
 published to nuget.org for both .NET 8+ and .NET Framework 4.6.2+:
 ```powershell
-dotnet add package Scry.Client
+dotnet add package Scry.Net.Client
 ```
 This gets you `ScryClient`, `ExecutionRequest`, and everything needed to connect to and drive an
 endpoint someone else attached or embedded - it does not perform attach itself. A test that needs to
