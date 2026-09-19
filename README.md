@@ -188,7 +188,9 @@ endpoint someone else attached or embedded - it does not perform attach itself. 
 *attach* shells out to the downloaded `scry` CLI first (exactly what this repo's own attach tests do),
 then uses `ScryClient` to drive the result. `Scry.Injector`/`Scry.Runtime`/`Scry.Endpoint`/`Scry.Wpf`/
 `Scry.WinForms` (attach internals and embedded-mode hosting) aren't on NuGet yet - build from source
-for those, per `docs/development.md`.
+for those, per `docs/development.md`. Alternatively, you can reference `Scry.Client.dll`, `Scry.Contracts.dll`,
+and `scry-injector.dll` directly from the release zip's `lib/` directory (`lib/net` for .NET 8+ or `lib/netfx`
+for .NET Framework 4.6.2+) without using NuGet.
 
 **Using Scry.NET with other AI agents.** Claude Code users can install the Skill directly:
 `/plugin marketplace add sdaliyot/Scry.NET` then `/plugin install scry@scry-plugins` - this expects

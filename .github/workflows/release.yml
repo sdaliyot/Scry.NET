@@ -72,6 +72,18 @@ jobs:
         run: |
           foreach ($arch in "win-x64", "win-x86") {
               $dir = "artifacts\scry-$arch"
+
+              # 1. Remove all PDBs (root and payload)
+              Get-ChildItem -Path $dir -Recurse -Filter *.pdb | Remove-Item -Force
+
+              # 2. Remove orphaned runtime config
+              Remove-Item "$dir\scry-injector.runtimeconfig.json" -Force -ErrorAction SilentlyContinue
+
+              # 3. Include reference assemblies for test projects (lib/net and lib/netfx)
+              New-Item -ItemType Directory -Path "$dir\lib\net", "$dir\lib\netfx" -Force | Out-Null
+              Copy-Item "src\Scry.Contracts\bin\Release\net8.0\Scry.Contracts.dll", "src\Scry.Client\bin\Release\net8.0\Scry.Client.dll", "src\Scry.Injector\bin\Release\net8.0\scry-injector.dll" -Destination "$dir\lib\net"
+              Copy-Item "src\Scry.Contracts\bin\Release\net462\Scry.Contracts.dll", "src\Scry.Client\bin\Release\net462\Scry.Client.dll", "src\Scry.Injector\bin\Release\net462\scry-injector.dll" -Destination "$dir\lib\netfx"
+
               Copy-Item README.md, LICENSE -Destination $dir
               Copy-Item skills\scry\SKILL.md -Destination $dir
               Compress-Archive -Path "$dir\*" -DestinationPath "artifacts\scry-$arch.zip"
