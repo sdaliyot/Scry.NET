@@ -24,7 +24,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = $PSScriptRoot
-$versionArgs = if ($Version) { @("-p:Version=$Version") } else { @() }
+
+# NOTE: must be a plain statement, not "$versionArgs = if (...) { @(...) } else { @() }" -
+# assigning from an if/else *expression* runs the single-element array literal through
+# PowerShell's pipeline output capture, which unwraps a 1-item array down to a bare string.
+# Splatting (@versionArgs) a bare string then enumerates it character-by-character (strings are
+# IEnumerable<char>), passing "-p:Version=X" to dotnet/MSBuild as one argument per character.
+$versionArgs = @()
+if ($Version) {
+    $versionArgs = @("-p:Version=$Version")
+}
 
 function Invoke-Step {
     param(
