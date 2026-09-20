@@ -1,0 +1,13 @@
+#pragma once
+
+#ifndef SCRY_FILEVERSION
+#define SCRY_FILEVERSION 0,1,0,0
+#endif
+
+#ifndef SCRY_FILEVERSION_STR
+#define SCRY_FILEVERSION_STR "0.1.0.0"
+#endif
+
+#ifndef SCRY_PRODUCTVERSION_STR
+#define SCRY_PRODUCTVERSION_STR "0.1.0"
+#endif

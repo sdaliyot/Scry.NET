@@ -2,10 +2,42 @@
 param(
     [ValidateSet("x86", "x64", "all")]
     [string] $Architecture = "all",
+    [string] $Version,
     [switch] $Rebuild
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Version) {
+    $cleanVersion = $Version -replace '\+.*$', ''
+    $semverCore = ($cleanVersion -split '-')[0]
+    $parts = $semverCore.Split('.')
+    $major = if ($parts.Length -ge 1) { [int]$parts[0] } else { 0 }
+    $minor = if ($parts.Length -ge 2) { [int]$parts[1] } else { 0 }
+    $patch = if ($parts.Length -ge 3) { [int]$parts[2] } else { 0 }
+    $build = if ($parts.Length -ge 4) { [int]$parts[3] } else { 0 }
+    $fileVersionComma = "$major,$minor,$patch,$build"
+    $fileVersionStr = "$major.$minor.$patch.$build"
+    $productVersionStr = $Version
+
+    $headerContent = @"
+#pragma once
+
+#ifndef SCRY_FILEVERSION
+#define SCRY_FILEVERSION $fileVersionComma
+#endif
+
+#ifndef SCRY_FILEVERSION_STR
+#define SCRY_FILEVERSION_STR "$fileVersionStr"
+#endif
+
+#ifndef SCRY_PRODUCTVERSION_STR
+#define SCRY_PRODUCTVERSION_STR "$productVersionStr"
+#endif
+"@
+    Set-Content -Path (Join-Path $PSScriptRoot "Version.h") -Value $headerContent -Encoding ASCII
+}
+
 $project = Join-Path $PSScriptRoot "Scry.Injector.Native.vcxproj"
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 

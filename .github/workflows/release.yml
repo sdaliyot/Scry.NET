@@ -36,10 +36,10 @@ jobs:
 
       - name: Build native bootstrap DLL (both architectures)
         shell: pwsh
-        run: .\build-native.ps1 -Architecture all
+        run: .\build-native.ps1 -Architecture all -Version ${{ steps.version.outputs.version }}
 
       - name: dotnet build Scry.sln -c Release
-        run: dotnet build Scry.sln -c Release -p:RequireNativeInjector=true --nologo
+        run: dotnet build Scry.sln -c Release -p:Version=${{ steps.version.outputs.version }} -p:RequireNativeInjector=true --nologo
 
       - name: Run the full validation matrix
         shell: pwsh
@@ -62,10 +62,10 @@ jobs:
           dotnet nuget push "artifacts\packages\Scry.Net.Client.*.nupkg" --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Publish self-contained CLI (win-x64)
-        run: dotnet publish src\Scry.Cli -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -o artifacts\scry-win-x64
+        run: dotnet publish src\Scry.Cli -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -p:Version=${{ steps.version.outputs.version }} -o artifacts\scry-win-x64
 
       - name: Publish self-contained CLI (win-x86)
-        run: dotnet publish src\Scry.Cli -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -o artifacts\scry-win-x86
+        run: dotnet publish src\Scry.Cli -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:RequireNativeInjector=true -p:Version=${{ steps.version.outputs.version }} -o artifacts\scry-win-x86
 
       - name: Bundle release zips
         shell: pwsh

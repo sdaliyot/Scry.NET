@@ -64,6 +64,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ScryBootstrap.h" />
+    <ClInclude Include="Version.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Version.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
