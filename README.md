@@ -166,37 +166,64 @@ anything the other cannot.
 
 ## Getting started
 
-There are two independent install paths, matching the two things people use Scry.NET for.
+There are two primary ways to get started with Scry.NET:
 
-**The `scry` CLI, for AI agents and anyone driving attach mode from the command line.** Download the
-self-contained build for your architecture from the [latest
-release](https://github.com/sdaliyot/Scry.NET/releases/latest) - `scry-win-x64.zip` or
-`scry-win-x86.zip` - and unzip it. `scry.exe` needs no separate .NET runtime install; it's
-self-contained. Examples in this README written as `scry ...` assume it's on your `PATH` or invoked
-by full path. (Building from source and running `dotnet publish src\Scry.Cli` produces the same
-attach-capable layout - see [`docs/development.md`](docs/development.md) - but the release zip is the
-no-build path.) Unsigned binaries: see the note in the release description about Windows
-SmartScreen/antivirus warnings on first run.
+### 1. For AI agents (and CLI use)
 
-**NuGet, for test projects that connect to an endpoint.** `Scry.Net.Contracts` and `Scry.Net.Client` are
-published to nuget.org for both .NET 8+ and .NET Framework 4.6.2+:
-```powershell
-dotnet add package Scry.Net.Client
-```
-This gets you `ScryClient`, `ExecutionRequest`, and everything needed to connect to and drive an
-endpoint someone else attached or embedded - it does not perform attach itself. A test that needs to
-*attach* shells out to the downloaded `scry` CLI first (exactly what this repo's own attach tests do),
-then uses `ScryClient` to drive the result. `Scry.Injector`/`Scry.Runtime`/`Scry.Endpoint`/`Scry.Wpf`/
-`Scry.WinForms` (attach internals and embedded-mode hosting) aren't on NuGet yet - build from source
-for those, per `docs/development.md`. Alternatively, you can reference `Scry.Client.dll`, `Scry.Contracts.dll`,
-and `scry-injector.dll` directly from the release zip's `lib/` directory (`lib/net` for .NET 8+ or `lib/netfx`
-for .NET Framework 4.6.2+) without using NuGet.
+The `scry` CLI lets AI agents and developers inspect, mutate, and attach to running .NET applications.
 
-**Using Scry.NET with other AI agents.** Claude Code users can install the Skill directly:
-`/plugin marketplace add sdaliyot/Scry.NET` then `/plugin install scry@scry-plugins` - this expects
-the `scry` CLI already installed per above. Codex and GitHub Copilot have no equivalent shared Skill
-format; paste [`skills/scry/SKILL.md`](skills/scry/SKILL.md)'s content into Codex's `AGENTS.md` or
-Copilot's custom instructions after installing the CLI the same way.
+1. **Download the release bundle**:
+   Download the self-contained build for your target application's architecture from the [latest release](https://github.com/sdaliyot/Scry.NET/releases/latest):
+   - `scry-win-x64.zip` for 64-bit target processes.
+   - `scry-win-x86.zip` for 32-bit (x86) target processes.
+   
+   *Note*: The architecture of `scry.exe` must match the architecture of the target process you wish to attach to (an x64 injector cannot attach to an x86 target and vice versa). If you work with both 32-bit and 64-bit targets, both bundles can be downloaded side-by-side. `scry.exe` is self-contained and needs no separate .NET runtime install.
+
+   *Unsigned binaries*: Windows SmartScreen or antivirus/EDR software may warn on first run. This is expected for an unsigned binary that performs process injection by design; see [`docs/threat-model.md`](docs/threat-model.md).
+
+2. **Configure your environment**:
+   Make `scry.exe` discoverable by adding its location to your environment:
+   - If using a single architecture, add its unzipped folder to your system `PATH`.
+   - If using both architectures or keeping them in separate directories, define the corresponding environment variable(s):
+     - `SCRY_HOME_X64` pointing to the directory containing 64-bit `scry.exe` (e.g. `C:\scry-win-x64`)
+     - `SCRY_HOME_X86` pointing to the directory containing 32-bit `scry.exe` (e.g. `C:\scry-win-x86`)
+
+3. **Install the Skill in your AI agent**:
+   - **Claude Code**: Install the Skill directly:
+     ```text
+     /plugin marketplace add sdaliyot/Scry.NET
+     /plugin install scry@scry-plugins
+     ```
+   - **GitHub Copilot, OpenAI Codex, Cursor, etc.**: Paste the contents of [`skills/scry/SKILL.md`](skills/scry/SKILL.md) into your agent's instructions (e.g. `AGENTS.md`, `.cursorrules`, or custom agent instructions).
+
+4. **Prompting your AI agent (example usage)**:
+   Scry is designed for scenarios where an agent should verify its work against the real running application rather than guessing from source code or waiting for manual UI verification. Example prompt:
+   > *"I just refactored the discount calculation in `CheckoutViewModel.cs`. Please launch or attach to `CheckoutApp`, add two items to the shopping cart, and use Scry to verify that the total discount displayed on the screen and in the ViewModel state matches 15%."*
+
+   The agent will discover or attach to the process via `scry attach`, interact with UI controls or internal state, and assert expected behavior. See [As an agent would, through the CLI](#as-an-agent-would-through-the-cli) above for the step-by-step command flow.
+
+### 2. For automated tests
+
+Automated test suites can interact with Scry.NET endpoints either via NuGet or direct reference:
+
+1. **Connect to endpoints using NuGet**:
+   `Scry.Net.Contracts` and `Scry.Net.Client` are published to nuget.org for both .NET 8+ and .NET Framework 4.6.2+:
+   ```powershell
+   dotnet add package Scry.Net.Client
+   ```
+   This provides `ScryClient`, `ExecutionRequest`, and everything needed to connect to and drive an endpoint over named pipes or TCP.
+   *(Alternatively, if you prefer not to use NuGet, reference `Scry.Client.dll`, `Scry.Contracts.dll`, and `scry-injector.dll` directly from the release zip's `lib\net` or `lib\netfx` directory).*
+
+2. **Attaching in tests**:
+   `Scry.Net.Client` connects to already-running endpoints. If your test suite needs to *attach* to an uninstrumented target process, use the downloaded `scry.exe` CLI:
+   - Resolve `scry.exe` from `PATH` or the configured `SCRY_HOME_X64` / `SCRY_HOME_X86` environment variables.
+   - Shell out to `scry attach <pid>` before connecting with `ScryClient` (this is the recommended, no-build approach).
+
+   *See [As a test would, in C#](#as-a-test-would-in-c) above for an end-to-end example demonstrating launching, attaching, clicking controls on the UI thread, and asserting internal state in C#.*
+
+---
+
+*Advanced: Building from source* — If you need to modify or rebuild the native injector, adapters, or payload assemblies, see [`docs/development.md`](docs/development.md). Running `dotnet publish src\Scry.Cli` produces the same attach-capable layout as the release zips.
 
 ## Architecture
 

@@ -21,17 +21,55 @@ what your expressions can rely on rather than whether attaching works: an obfusc
 breaks anything that names a member, and `#if DEBUG` code is absent, so the application itself may
 behave differently from a Debug build you tested against.
 
+## Locating the `scry` CLI
+
+The `scry` CLI executable can be located via:
+1. System `PATH` (invoked directly as `scry` or resolved with `Get-Command scry -ErrorAction SilentlyContinue`).
+2. Architecture-specific environment variables:
+   - `SCRY_HOME_X64` for 64-bit target applications (e.g. `C:\scry-win-x64`).
+   - `SCRY_HOME_X86` for 32-bit (x86) target applications (e.g. `C:\scry-win-x86`).
+
+> [!IMPORTANT]
+> **Check Process, User, and Machine scopes:**
+> Environment variables defined or modified by the user or an installer after your agent session started will **not** appear in the current `Process` environment table (`$env:...`). Always query `Process`, `User`, and `Machine` scopes:
+> ```powershell
+> function Find-ScryCli([string]$targetArch = "x64") {
+>     $var = if ($targetArch -match "86|32") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
+> 
+>     foreach ($scope in 'Process', 'User', 'Machine') {
+>         $dir = [Environment]::GetEnvironmentVariable($var, $scope)
+>         if (![string]::IsNullOrWhiteSpace($dir)) {
+>             $path = if (Test-Path $dir -PathType Leaf) { $dir } else { Join-Path $dir "scry.exe" }
+>             if (Test-Path $path) { return $path }
+>         }
+>     }
+> 
+>     $cmd = Get-Command scry -ErrorAction SilentlyContinue
+>     if ($cmd) { return $cmd.Source }
+>     return $null
+> }
+> ```
+
+### Architecture Matching for Attaching
+When attaching to an existing process using `scry attach`:
+- Injection requires the architecture of `scry.exe` to match the target process's bitness.
+- An x64 `scry.exe` **cannot** attach to an x86 target (fails immediately with `architecture_mismatch`).
+- An x86 `scry.exe` **cannot** attach to an x64 target.
+- Determine the target process's architecture before attaching (for example, inspecting the process or its primary module). Select the matching `scry.exe` from `SCRY_HOME_X64` or `SCRY_HOME_X86`.
+- If the required environment variable is not defined and `scry.exe` is not found on `PATH`, prompt the user to download the matching release bundle (`scry-win-x64.zip` or `scry-win-x86.zip`) and define `SCRY_HOME_X64` or `SCRY_HOME_X86`.
+
 ## Start safely
 
-1. Confirm the target is a local development or test process.
-2. Run `scry discover`.
-3. Select one exact target. Prefer its `targetId`; use an alias only when it is unambiguous.
-4. Run `scry capabilities` and `scry roots`.
-5. Prefer `inspect`, `get`, `set`, `invoke`, and `enumerate`.
-6. Use `wpf.*` or `winforms.*` projection operations for UI traversal and synchronization.
-7. Use `evaluate` or `execute` only when the structured operations cannot do the job.
-8. Validate mutations with a fresh read, wait, or assertion.
-9. Release leased handles when a persistent session is used.
+1. Locate the appropriate `scry` CLI binary (matching the target architecture if attaching).
+2. Confirm the target is a local development or test process.
+3. Run `scry discover`. If the target is running but has no endpoint yet, attach to it: `scry attach <pid-or-name> [--adapters wpf|winforms]`.
+4. Select one exact target. Prefer its `targetId`; use an alias only when it is unambiguous.
+5. Run `scry capabilities` and `scry roots`.
+6. Prefer `inspect`, `get`, `set`, `invoke`, and `enumerate`.
+7. Use `wpf.*` or `winforms.*` projection operations for UI traversal and synchronization.
+8. Use `evaluate` or `execute` only when the structured operations cannot do the job.
+9. Validate mutations with a fresh read, wait, or assertion.
+10. Release leased handles when a persistent session is used.
 
 Run `scry --help`, `scry help <command>`, or `scry schema` whenever the installed CLI
 contract must be checked. `scry schema` is deterministic machine-readable JSON and is the
