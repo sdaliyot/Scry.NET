@@ -12,11 +12,19 @@
 param(
     # Skips native-DLL and x86-leg steps - useful for a quick inner-loop check. CI and a real
     # release validation should always run the full matrix (the default).
-    [switch] $Quick
+    [switch] $Quick,
+    # Forwarded as -p:Version to every dotnet build/test invocation below. Omit for a plain local
+    # run (falls back to Directory.Build.props' VersionPrefix, as before). The release workflow
+    # MUST pass the tag-derived version here: this script's own dotnet build/test calls otherwise
+    # rebuild Scry.Contracts/Scry.Client/Scry.Injector (and, via BuildInjectionPayloads, the
+    # payload/adapter assemblies) without Version, silently resetting them back to the 0.1.0
+    # default after release.yml's earlier versioned build already produced correct binaries.
+    [string] $Version
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = $PSScriptRoot
+$versionArgs = if ($Version) { @("-p:Version=$Version") } else { @() }
 
 function Invoke-Step {
     param(
@@ -36,14 +44,17 @@ Push-Location $repoRoot
 try {
     if (-not $Quick) {
         Invoke-Step "Build native bootstrap DLL" {
-            & (Join-Path $repoRoot "build-native.ps1")
+            & (Join-Path $repoRoot "build-native.ps1") -Version $Version
         }
     }
 
     Invoke-Step "dotnet build Scry.sln -c Release" {
         # RequireNativeInjector=true so a missing native helper fails the build here rather than
         # producing a CLI that silently cannot attach - the whole reason that switch exists.
-        dotnet build Scry.sln -c Release -p:RequireNativeInjector=true --nologo
+        # @versionArgs must be forwarded here: this is the first build this script runs, and
+        # without it every project would rebuild against Directory.Build.props' VersionPrefix
+        # default, clobbering whatever version the caller (e.g. release.yml) already produced.
+        dotnet build Scry.sln -c Release -p:RequireNativeInjector=true @versionArgs --nologo
     }
 
     Invoke-Step "dotnet test (net8.0)" {
@@ -51,25 +62,27 @@ try {
     }
 
     Invoke-Step "dotnet test (net462, x64)" {
+        # No --no-build here (RunConfiguration.TargetPlatform=x64 needs its own build), so
+        # @versionArgs must be forwarded or this silently rebuilds net462 without Version.
         dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 `
-            --artifacts-path artifacts\net462-x64 -p:PlatformTarget=x64 --nologo `
+            --artifacts-path artifacts\net462-x64 -p:PlatformTarget=x64 @versionArgs --nologo `
             -- RunConfiguration.TargetPlatform=x64
     }
 
     if (-not $Quick) {
         Invoke-Step "dotnet test (net462, x86)" {
             dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 `
-                --artifacts-path artifacts\net462-x86 -p:PlatformTarget=x86 --nologo `
+                --artifacts-path artifacts\net462-x86 -p:PlatformTarget=x86 @versionArgs --nologo `
                 -- RunConfiguration.TargetPlatform=x86
         }
     }
 
     Invoke-Step "dotnet test Scry.Wpf.Tests (net462)" {
-        dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462 --nologo
+        dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462 @versionArgs --nologo
     }
 
     Invoke-Step "dotnet test Scry.WinForms.Tests (net462)" {
-        dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net462 --nologo
+        dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net462 @versionArgs --nologo
     }
 
     Invoke-Step "dotnet format --verify-no-changes" {

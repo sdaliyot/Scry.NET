@@ -43,7 +43,10 @@ jobs:
 
       - name: Run the full validation matrix
         shell: pwsh
-        run: .\validate.ps1
+        # -Version must be forwarded: without it, validate.ps1's own dotnet build/test calls
+        # rebuild against Directory.Build.props' VersionPrefix default (0.1.0), clobbering the
+        # correctly-versioned binaries the previous step just produced before Pack/Publish run.
+        run: .\validate.ps1 -Version ${{ steps.version.outputs.version }}
 
       - name: Pack Scry.Net.Contracts and Scry.Net.Client
         run: |
