@@ -70,11 +70,11 @@
     <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
              Targets="Build"
              RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
-             Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernTargetFramework)" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernTargetFramework);Version=$(Version)" />
     <MSBuild Projects="..\Scry.Injector.Payload\Scry.Injector.Payload.csproj"
              Targets="Build"
              RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
-             Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget)" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget);Version=$(Version)" />
 
     <!--
       Stage the optional desktop adapters beside each payload so an attach that requests one
@@ -86,11 +86,11 @@
     <MSBuild Projects="..\Scry.Wpf\Scry.Wpf.csproj;..\Scry.WinForms\Scry.WinForms.csproj"
              Targets="Build"
              RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
-             Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernWindowsTargetFramework)" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryModernWindowsTargetFramework);Version=$(Version)" />
     <MSBuild Projects="..\Scry.Wpf\Scry.Wpf.csproj;..\Scry.WinForms\Scry.WinForms.csproj"
              Targets="Build"
              RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun"
-             Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget)" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(ScryNetFrameworkTarget);Version=$(Version)" />
 
     <ItemGroup>
       <ModernPayload Include="..\Scry.Injector.Payload\bin\$(Configuration)\$(ScryModernTargetFramework)\**\*" />
