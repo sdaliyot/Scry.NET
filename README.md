@@ -1,6 +1,6 @@
 # Scry.NET
 
-<img src="assets/Scry.NET-logo.png" alt="Scry.NET logo" width="200" />
+<img src="assets/Scry.NET-logo.png" alt="Scry.NET logo" width="130" align="left" style="margin-right: 15px; margin-bottom: 10px;"/>
 
 **A must-have tool for .NET development in the AI era!**
 
@@ -10,6 +10,8 @@ actually need one for. AI agents that must check their own work against the real
 rather than reason about what a change probably did, through the
 [agent Skill](skills/scry/SKILL.md) that ships with it. And automated tests that need to reach
 past the UI into the state behind it.**
+
+<br clear="left"/>
 
 Connect to a running application and read its actual object graph, write to it, call its methods,
 run arbitrary C# inside it, walk its WPF or WinForms tree, and wait on or assert conditions - all
