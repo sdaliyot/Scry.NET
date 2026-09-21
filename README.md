@@ -1,5 +1,7 @@
 # Scry.NET
 
+<img src="assets/Scry.NET-logo.png" alt="Scry.NET logo" width="200" />
+
 **A must-have tool for .NET development in the AI era!**
 
 **Scry.NET gives your .NET application what the DevTools protocol gives a web or Node.js app:

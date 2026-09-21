@@ -89,6 +89,10 @@ jobs:
 
               Copy-Item README.md, LICENSE -Destination $dir
               Copy-Item skills\scry\SKILL.md -Destination $dir
+
+              # README.md links the logo as "assets/Scry.NET-logo.png" - keep that path valid here too.
+              New-Item -ItemType Directory -Path "$dir\assets" -Force | Out-Null
+              Copy-Item assets\Scry.NET-logo.png -Destination "$dir\assets"
               Compress-Archive -Path "$dir\*" -DestinationPath "artifacts\scry-$arch.zip"
           }
 

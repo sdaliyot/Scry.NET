@@ -10,6 +10,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>$(ScryModernTargetFramework)</TargetFramework>
     <AssemblyName>scry</AssemblyName>
+    <ApplicationIcon>..\..\assets\Scry.NET-logo.ico</ApplicationIcon>
     <!--
       PackAsTool/PackageId are left in place (a `dotnet pack` still works locally/offline), but the
       CLI is not pushed to nuget.org: `dotnet pack` does not run the publish-time staging that puts
