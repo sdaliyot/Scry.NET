@@ -602,9 +602,24 @@ target were local.
    machine, to a path *outside* its own `%LOCALAPPDATA%\Scry\targets` - `Invoke-Command` with `Copy-Item`
    is the suggested route. That file is a bearer credential: whoever holds it can drive the target for the
    rest of the endpoint's lifetime, so delete it once you are done.
-3. **Establish a port forward** from the local machine to the target's bound port - `ssh -L
-   9000:127.0.0.1:<bound-port> user@target-host`, or `netsh interface portproxy` if SSH is not an
-   option.
+3. **Establish a port forward** from the local machine to the target's bound port. `ssh -L
+   9000:127.0.0.1:<bound-port> user@target-host` is the shortest route when OpenSSH Server is already
+   enabled on the target. Without it, `netsh interface portproxy` does the same job in two hops, using
+   nothing but what Windows already ships with:
+   ```powershell
+   # On the target machine: expose its own loopback Scry port on a routable interface.
+   netsh interface portproxy add v4tov4 listenaddress=<target-host-ip> listenport=<bound-port> `
+       connectaddress=127.0.0.1 connectport=<bound-port>
+
+   # On the local machine: forward a local loopback port to that.
+   netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=9000 `
+       connectaddress=<target-host-ip> connectport=<bound-port>
+   ```
+   Both directions need admin. Unlike the SSH route, the target-side rule puts the (still
+   token-gated) port on a network-reachable interface for as long as the rule exists - worth scoping
+   with a Windows Firewall rule to just the calling machine's address in a real deployment, and worth
+   removing (`netsh interface portproxy delete v4tov4 ...`, same parameters) once you are done, same as
+   the descriptor file above.
 4. **Run against it** with `--descriptor` (pointed at the copied file) plus `--address`:
    ```powershell
    scry evaluate --descriptor .\remote-target.json --address 127.0.0.1:9000 --source "1 + 1"
