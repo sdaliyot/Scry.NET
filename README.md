@@ -78,7 +78,7 @@ becomes addressable by name. See [Embedded host](#embedded-host) for a worked ex
 **Both modes converge on the same `EndpointHost.Start`.** The protocol, every operation, the CLI and
 the Skill are identical either way, so the choice is about deployment, not capability.
 
-## Two ways it gets used
+## How it gets used
 
 **An AI agent validating its own work.** An agent that just changed code can check the running
 application instead of reasoning about what the change probably did - read the live state back,
@@ -91,6 +91,13 @@ cannot read a view model or call a service. A Scry.NET test can drive the real c
 against internal state in the same run. Because `evaluate` and `execute` compile against the
 assemblies already loaded in the target, a renamed property fails as a compile error with a
 diagnostic rather than as a silent mis-click that passes.
+
+**A production process stuck in a "limbo" state.** Every so often a long-running process ends up
+somewhere it shouldn't be - not crashed, not quite working either. You know a restart will clear it,
+and you also know that restarting loses the exact state that got it there, with no way to reproduce
+it on demand. The logs don't explain how it got there, so all you can do is add more logging and hope
+it happens again. Attach with Scry.NET instead and query the live state directly - the object graph
+that's actually in memory, right now, before you restart it away.
 
 ## It in action
 
