@@ -1,6 +1,6 @@
 # Scry.NET
 
-<img src="assets/Scry.NET-logo.png" alt="Scry.NET logo" width="130" align="left" style="margin-right: 15px; margin-bottom: 10px;"/>
+<img src="assets/Scry.NET-logo.png" alt="Scry.NET logo" width="140" align="left" style="margin-right: 15px; margin-bottom: 10px;"/>
 
 **A must-have tool for .NET development in the AI era!**
 
