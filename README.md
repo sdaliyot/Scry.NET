@@ -96,7 +96,7 @@ diagnostic rather than as a silent mis-click that passes.
 somewhere it shouldn't be - not crashed, not quite working either. You know a restart will clear it,
 and you also know that restarting loses the exact state that got it there, with no way to reproduce
 it on demand. The logs don't explain how it got there, so all you can do is add more logging and hope
-it happens again. Attach with Scry.NET instead and query the live state directly - the object graph
+it helps the next time it happens. Attach with Scry.NET instead and query the live state directly - the object graph
 that's actually in memory, right now, before you restart it away.
 
 ## It in action
