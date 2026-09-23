@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text.Json;
 using Scry.Contracts;
 using Scry.Injector;
@@ -16,6 +17,16 @@ internal static class Cli
     private const int OperationError = 5;
     private const int PartialFailure = 6;
     private const int InternalError = 70;
+
+    // AssemblyInformationalVersionAttribute carries the exact value release.yml passes as
+    // -p:Version=<tag-without-v> (e.g. "0.1.0"), unlike AssemblyVersion/FileVersion which MSBuild
+    // pads/truncates to four numeric parts. The SDK appends "+<git-commit-sha>" to it by default
+    // (SourceRevisionId) - stripped here so this matches a GitHub release tag_name exactly, which
+    // is what a caller comparing against "latest release" needs. Falls back to Directory.Build.
+    // props' VersionPrefix default for a local dev build that never set -p:Version.
+    private static readonly string CliVersion = (Assembly.GetExecutingAssembly()
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? "0.0.0-dev").Split('+')[0];
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -42,6 +53,18 @@ internal static class Cli
                 }
 
                 CliContract.WriteSchema(Console.Out);
+                return Success;
+            }
+
+            if (args[0].Equals("version", StringComparison.OrdinalIgnoreCase) ||
+                args[0] == "--version")
+            {
+                if (args.Length != 1)
+                {
+                    throw new CliUsageException("The version command does not accept options.");
+                }
+
+                Console.Out.WriteLine(CliVersion);
                 return Success;
             }
 

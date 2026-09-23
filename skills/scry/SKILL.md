@@ -23,30 +23,136 @@ behave differently from a Debug build you tested against.
 
 ## Locating the `scry` CLI
 
-The `scry` CLI executable can be located via:
-1. System `PATH` (invoked directly as `scry` or resolved with `Get-Command scry -ErrorAction SilentlyContinue`).
-2. Architecture-specific environment variables:
-   - `SCRY_HOME_X64` for 64-bit target applications (e.g. `C:\scry-win-x64`).
-   - `SCRY_HOME_X86` for 32-bit (x86) target applications (e.g. `C:\scry-win-x86`).
+Call `Resolve-ScryCli -Architecture x64` (or `x86`) below instead of asking the user to install
+anything. It finds an existing `scry.exe` if one is already configured, and otherwise downloads,
+extracts, and configures one automatically - no manual download or environment variable setup
+required. It also keeps an existing install current: on an existing install, at most once per 24
+hours (tracked next to `scry.exe`) it compares the installed `scry --version` against the
+[latest GitHub release](https://github.com/sdaliyot/Scry.NET/releases/latest) and updates in place
+if a newer one exists. Any failure to reach GitHub, or to replace a file still locked because
+`scry.exe` is currently injected into a running target, is not fatal - it just means "nothing
+changed this time"; the existing install (if any) is always what gets returned.
 
 > [!IMPORTANT]
 > **Check Process, User, and Machine scopes:**
-> Environment variables defined or modified by the user or an installer after your agent session started will **not** appear in the current `Process` environment table (`$env:...`). Always query `Process`, `User`, and `Machine` scopes:
+> Environment variables defined or modified by the user or an installer after your agent session
+> started will **not** appear in the current `Process` environment table (`$env:...`). Always query
+> `Process`, `User`, and `Machine` scopes - `Resolve-ScryCli` does this internally before deciding
+> whether an install or update is needed:
 > ```powershell
-> function Find-ScryCli([string]$targetArch = "x64") {
->     $var = if ($targetArch -match "86|32") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
-> 
+> function Resolve-ScryCli {
+>     param(
+>         [Parameter(Mandatory)]
+>         [ValidateSet("x64", "x86")]
+>         [string]$Architecture
+>     )
+>
+>     $envVar = if ($Architecture -eq "x86") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
+>     $repo = "sdaliyot/Scry.NET"
+>
+>     function Resolve-ScryExe([string]$dir) {
+>         $path = if (Test-Path $dir -PathType Leaf) { $dir } else { Join-Path $dir "scry.exe" }
+>         if (Test-Path $path) { return $path }
+>         return $null
+>     }
+>
+>     # 1. Check Process, User, Machine env vars, then PATH - same order as before.
+>     $exePath = $null
 >     foreach ($scope in 'Process', 'User', 'Machine') {
->         $dir = [Environment]::GetEnvironmentVariable($var, $scope)
+>         $dir = [Environment]::GetEnvironmentVariable($envVar, $scope)
 >         if (![string]::IsNullOrWhiteSpace($dir)) {
->             $path = if (Test-Path $dir -PathType Leaf) { $dir } else { Join-Path $dir "scry.exe" }
->             if (Test-Path $path) { return $path }
+>             $exePath = Resolve-ScryExe $dir
+>             if ($exePath) { break }
 >         }
 >     }
-> 
->     $cmd = Get-Command scry -ErrorAction SilentlyContinue
->     if ($cmd) { return $cmd.Source }
->     return $null
+>     if (-not $exePath) {
+>         $cmd = Get-Command scry -ErrorAction SilentlyContinue
+>         if ($cmd) { $exePath = $cmd.Source }
+>     }
+>
+>     $targetDir = if ($exePath) { Split-Path $exePath -Parent } else { Join-Path $env:LOCALAPPDATA "Scry.NET\$Architecture" }
+>     $stampPath = Join-Path $targetDir ".scry-last-checked"
+>
+>     # 2. Skip the network entirely if we already checked within the last 24h.
+>     if ($exePath) {
+>         $lastChecked = if (Test-Path $stampPath) { Get-Date (Get-Content $stampPath -Raw) } else { $null }
+>         if ($lastChecked -and ((Get-Date) - $lastChecked) -lt (New-TimeSpan -Hours 24)) {
+>             return $exePath
+>         }
+>     }
+>
+>     # 3. Ask GitHub for the latest release. Any failure here (offline, rate-limited) just means
+>     #    "can't check right now" - keep whatever's already installed rather than fail the attach.
+>     try {
+>         $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
+>     } catch {
+>         if ($exePath) {
+>             Set-Content $stampPath (Get-Date -Format "o")
+>             return $exePath
+>         }
+>         throw "Could not reach GitHub to install scry.exe ($Architecture): $_"
+>     }
+>
+>     $latest = $release.tag_name.TrimStart('v')
+>     if ($exePath) {
+>         $installed = (& $exePath --version).Trim()
+>         if ($installed -eq $latest) {
+>             Set-Content $stampPath (Get-Date -Format "o")
+>             return $exePath
+>         }
+>         Write-Host "scry $installed -> $latest available; updating $targetDir..."
+>     }
+>
+>     $asset = $release.assets | Where-Object { $_.name -eq "scry-win-$Architecture.zip" }
+>     if (-not $asset) { throw "Release $($release.tag_name) has no scry-win-$Architecture.zip asset." }
+>
+>     # 4. Install/update. scry.exe or a staged payload/native DLL can still be locked if it's
+>     #    currently injected into a running target - rename the old folder out of the way first so
+>     #    a lock never corrupts a working install, and restore it if anything below fails.
+>     $renamedOld = $null
+>     if (Test-Path $targetDir) {
+>         $renamedOld = "$targetDir-old"
+>         Remove-Item $renamedOld -Recurse -Force -ErrorAction SilentlyContinue
+>         try {
+>             Rename-Item $targetDir $renamedOld -ErrorAction Stop
+>         } catch {
+>             Write-Host "scry update deferred: $targetDir is in use."
+>             if ($exePath) {
+>                 Set-Content $stampPath (Get-Date -Format "o")
+>                 return $exePath
+>             }
+>             throw "$targetDir exists but is locked and could not be renamed, and no usable scry.exe was found. $_"
+>         }
+>     }
+>
+>     try {
+>         $zipPath = Join-Path $env:TEMP "scry-win-$Architecture-$($release.tag_name).zip"
+>         Invoke-WebRequest $asset.browser_download_url -OutFile $zipPath
+>         Expand-Archive $zipPath -DestinationPath $targetDir -Force
+>         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+>     } catch {
+>         # Download or extract failed - undo the rename and keep the previous install working.
+>         Remove-Item $targetDir -Recurse -Force -ErrorAction SilentlyContinue
+>         if ($renamedOld -and (Test-Path $renamedOld)) { Rename-Item $renamedOld $targetDir }
+>         if ($exePath) {
+>             Set-Content $stampPath (Get-Date -Format "o")
+>             Write-Host "scry update failed, keeping existing install: $_"
+>             return $exePath
+>         }
+>         throw "Could not install scry.exe ($Architecture): $_"
+>     }
+>
+>     if ($renamedOld -and (Test-Path $renamedOld)) {
+>         Remove-Item $renamedOld -Recurse -Force -ErrorAction SilentlyContinue
+>     }
+>
+>     Set-Content $stampPath (Get-Date -Format "o")
+>     [Environment]::SetEnvironmentVariable($envVar, $targetDir, 'User')
+>     Set-Item "env:$envVar" $targetDir
+>
+>     $newExe = Join-Path $targetDir "scry.exe"
+>     Write-Host "scry ready at $newExe ($($release.tag_name))"
+>     return $newExe
 > }
 > ```
 
@@ -55,12 +161,16 @@ When attaching to an existing process using `scry attach`:
 - Injection requires the architecture of `scry.exe` to match the target process's bitness.
 - An x64 `scry.exe` **cannot** attach to an x86 target (fails immediately with `architecture_mismatch`).
 - An x86 `scry.exe` **cannot** attach to an x64 target.
-- Determine the target process's architecture before attaching (for example, inspecting the process or its primary module). Select the matching `scry.exe` from `SCRY_HOME_X64` or `SCRY_HOME_X86`.
-- If the required environment variable is not defined and `scry.exe` is not found on `PATH`, prompt the user to download the matching release bundle (`scry-win-x64.zip` or `scry-win-x86.zip`) and define `SCRY_HOME_X64` or `SCRY_HOME_X86`.
+- Determine the target process's architecture before attaching (for example, inspecting the process or its primary module).
+- Call `Resolve-ScryCli -Architecture x64` or `-Architecture x86` to match - it installs or updates
+  the CLI automatically and returns the path to use. `SCRY_HOME_X64`/`SCRY_HOME_X86` still work
+  exactly as before if a human or CI pipeline has deliberately pinned them to a specific location or
+  version; `Resolve-ScryCli` only takes over when nothing usable is already configured, or when the
+  configured install is due for its periodic freshness check.
 
 ## Start safely
 
-1. Locate the appropriate `scry` CLI binary (matching the target architecture if attaching).
+1. Call `Resolve-ScryCli -Architecture x64` or `-Architecture x86` (matching the target architecture if attaching) to get the `scry` CLI binary - it installs or updates it automatically.
 2. Confirm the target is a local development or test process.
 3. Run `scry discover`. If the target is running but has no endpoint yet, attach to it: `scry attach <pid-or-name> [--adapters wpf|winforms]`.
 4. Select one exact target. Prefer its `targetId`; use an alias only when it is unambiguous.

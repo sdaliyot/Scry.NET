@@ -34,6 +34,14 @@ public sealed class CliContractTests
         Assert.Contains("timeoutMilliseconds", commandHelp.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("operationId", commandHelp.StandardOutput, StringComparison.Ordinal);
 
+        var versionRun = await RunCliAsync(cliPath, ["version"]);
+        Assert.Equal(0, versionRun.ExitCode);
+        Assert.False(string.IsNullOrWhiteSpace(versionRun.StandardOutput));
+
+        var versionFlagRun = await RunCliAsync(cliPath, ["--version"]);
+        Assert.Equal(0, versionFlagRun.ExitCode);
+        Assert.Equal(versionRun.StandardOutput, versionFlagRun.StandardOutput);
+
         var schemaRun = await RunCliAsync(cliPath, ["schema"]);
         Assert.Equal(0, schemaRun.ExitCode);
         using var schema = JsonDocument.Parse(schemaRun.StandardOutput);

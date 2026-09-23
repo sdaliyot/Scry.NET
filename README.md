@@ -183,23 +183,7 @@ There are two primary ways to get started with Scry.NET:
 
 The `scry` CLI lets AI agents and developers inspect, mutate, and attach to running .NET applications.
 
-1. **Download the release bundle**:
-   Download the self-contained build for your target application's architecture from the [latest release](https://github.com/sdaliyot/Scry.NET/releases/latest):
-   - `scry-win-x64.zip` for 64-bit target processes.
-   - `scry-win-x86.zip` for 32-bit (x86) target processes.
-   
-   *Note*: The architecture of `scry.exe` must match the architecture of the target process you wish to attach to (an x64 injector cannot attach to an x86 target and vice versa). If you work with both 32-bit and 64-bit targets, both bundles can be downloaded side-by-side. `scry.exe` is self-contained and needs no separate .NET runtime install.
-
-   *Unsigned binaries*: Windows SmartScreen or antivirus/EDR software may warn on first run. This is expected for an unsigned binary that performs process injection by design; see [`docs/threat-model.md`](docs/threat-model.md).
-
-2. **Configure your environment**:
-   Make `scry.exe` discoverable by adding its location to your environment:
-   - If using a single architecture, add its unzipped folder to your system `PATH`.
-   - If using both architectures or keeping them in separate directories, define the corresponding environment variable(s):
-     - `SCRY_HOME_X64` pointing to the directory containing 64-bit `scry.exe` (e.g. `C:\scry-win-x64`)
-     - `SCRY_HOME_X86` pointing to the directory containing 32-bit `scry.exe` (e.g. `C:\scry-win-x86`)
-
-3. **Install the Skill in your AI agent**:
+1. **Install the Skill in your AI agent**:
    - **Claude Code**: Install the Skill directly:
      ```text
      /plugin marketplace add sdaliyot/Scry.NET
@@ -207,11 +191,42 @@ The `scry` CLI lets AI agents and developers inspect, mutate, and attach to runn
      ```
    - **GitHub Copilot, OpenAI Codex, Cursor, etc.**: Paste the contents of [`skills/scry/SKILL.md`](skills/scry/SKILL.md) into your agent's instructions (e.g. `AGENTS.md`, `.cursorrules`, or custom agent instructions).
 
-4. **Prompting your AI agent (example usage)**:
+   There is nothing to download or configure by hand first: the Skill's `Resolve-ScryCli` function
+   downloads the matching self-contained `scry.exe` from the [latest release](https://github.com/sdaliyot/Scry.NET/releases/latest)
+   the first time an agent needs to attach, sets `SCRY_HOME_X64`/`SCRY_HOME_X86` itself, and checks
+   for and installs newer releases automatically from then on. See "Locating the `scry` CLI" in
+   [`skills/scry/SKILL.md`](skills/scry/SKILL.md) for exactly what it does. (See "Manual install"
+   below if you'd rather not have an agent do this - for example running `scry.exe` yourself, or a
+   CI pipeline that wants a pinned version instead of auto-updating to latest.)
+
+   *Unsigned binaries*: Windows SmartScreen or antivirus/EDR software may warn on first run. This is expected for an unsigned binary that performs process injection by design; see [`docs/threat-model.md`](docs/threat-model.md).
+
+2. **Prompting your AI agent (example usage)**:
    Scry is designed for scenarios where an agent should verify its work against the real running application rather than guessing from source code or waiting for manual UI verification. Example prompt:
    > *"I just refactored the discount calculation in `CheckoutViewModel.cs`. Please launch or attach to `CheckoutApp`, add two items to the shopping cart, and use Scry to verify that the total discount displayed on the screen and in the ViewModel state matches 15%."*
 
    The agent will discover or attach to the process via `scry attach`, interact with UI controls or internal state, and assert expected behavior. See [As an agent would, through the CLI](#as-an-agent-would-through-the-cli) above for the step-by-step command flow.
+
+#### Manual install
+
+For a human running `scry.exe` directly without an agent, or a CI pipeline pinning a specific
+version rather than auto-updating to latest:
+
+1. Download the self-contained build for your target application's architecture from the [latest release](https://github.com/sdaliyot/Scry.NET/releases/latest):
+   - `scry-win-x64.zip` for 64-bit target processes.
+   - `scry-win-x86.zip` for 32-bit (x86) target processes.
+
+   The architecture of `scry.exe` must match the architecture of the target process you wish to
+   attach to (an x64 injector cannot attach to an x86 target and vice versa). If you work with both
+   32-bit and 64-bit targets, both bundles can be downloaded side-by-side. `scry.exe` is
+   self-contained and needs no separate .NET runtime install.
+
+2. Make `scry.exe` discoverable:
+   - If using a single architecture, add its unzipped folder to your system `PATH`.
+   - If using both architectures or keeping them in separate directories, define the corresponding
+     environment variable(s):
+     - `SCRY_HOME_X64` pointing to the directory containing 64-bit `scry.exe` (e.g. `C:\scry-win-x64`)
+     - `SCRY_HOME_X86` pointing to the directory containing 32-bit `scry.exe` (e.g. `C:\scry-win-x86`)
 
 ### 2. For automated tests
 
@@ -538,7 +553,10 @@ See the development guide for complete adoption and validation flows.
 
 Run `scry --help` or `scry help <command>` for examples and the stable exit-code contract.
 `scry schema` emits the deterministic machine-readable command, argument, request, result,
-and exit-code catalog. Request payloads should come from `--request <file|->` (or
+and exit-code catalog. `scry version` (or `scry --version`) prints the CLI's own version
+(e.g. `0.1.0`), matching the tag of the [GitHub release](https://github.com/sdaliyot/Scry.NET/releases/latest)
+it shipped in - useful for scripts checking whether an installed `scry.exe` is current.
+Request payloads should come from `--request <file|->` (or
 `--input`) and C# source from `--source <file|->` or redirected stdin; agents never need
 to put source or secrets on a command line.
 

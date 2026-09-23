@@ -164,6 +164,13 @@ internal static class CliContract
             "scry schema",
             [],
             "CLI contract catalog."),
+        Local(
+            "version",
+            "Print the scry CLI's own version and exit - not a target operation.",
+            "scry version",
+            "scry version",
+            [],
+            "Bare version string, e.g. '0.1.0'."),
         Target(
             "capabilities",
             "capabilities",
@@ -550,6 +557,7 @@ internal static class CliContract
                   scry discover [--targets-dir <path>]
                   scry attach <pid|process-name> [--alias <name>] [--adapters wpf|winforms|none] [--tcp-port <port|0>] [--targets-dir <path>] [--appdomain <id|name|auto>]
                   scry schema
+                  scry version
                   scry <command> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry jobs <start|status|wait|cancel|logs> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry <scenario|batch> --input <file|->
@@ -566,7 +574,7 @@ internal static class CliContract
                   WPF:        wpf.snapshot, wpf.wait, wpf.assert, wpf.screenshot
                   WinForms:   winforms.snapshot, winforms.wait, winforms.assert, winforms.screenshot
                   AppDomain:  appdomain.list, appdomain.start (.NET Framework targets only)
-                  Contract:   schema
+                  Contract:   schema, version
 
                 Common target options:
                   --target <id-or-alias> | --descriptor <path>

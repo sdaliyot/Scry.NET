@@ -418,7 +418,12 @@ top-level surface, and every command supports `scry help <command>` or a trailin
 `--help`. `scry schema` (also available as `scry --json-schema`) emits a deterministic
 JSON catalog generated from the same command definitions used by CLI validation. It
 documents selectors, input modes, request fields, response envelopes, result shapes, and
-all exit codes, including `6` for a scenario or batch partial failure.
+all exit codes, including `6` for a scenario or batch partial failure. `scry version`
+(also `scry --version`) prints the CLI's own version, e.g. `0.1.0` - the same string as
+the GitHub release tag it shipped in (`AssemblyInformationalVersionAttribute`, with the
+SDK's `+<git-sha>` suffix stripped) - so a caller can compare it against the `tag_name`
+from `https://api.github.com/repos/sdaliyot/Scry.NET/releases/latest` without parsing a
+file version.
 
 Every target operation accepts exactly one of `--target <id-or-alias>` and
 `--descriptor <path>`, plus optional `--session` and `--correlation`. Successful and
