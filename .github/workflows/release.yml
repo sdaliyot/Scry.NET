@@ -5,12 +5,19 @@
 # One-time setup this workflow depends on (not done by this file):
 #   - Register a NuGet Trusted Publishing policy at nuget.org (account -> Trusted Publishing):
 #     Repository Owner "sdaliyot", Repository "Scry.NET", Workflow File "release.yml".
-#   - main is protected by a ruleset requiring a PR for every change, with no bypass entry for
-#     GitHub Actions' own identity (rulesets only offer role-based or installed-App bypass actors,
-#     and the platform's Actions runner isn't an installable App in that sense). The "Sync plugin
-#     manifest versions" step below therefore needs a repo secret GH_PUSH_TOKEN: a personal access
-#     token (Contents: read/write) from an account with bypass privilege (e.g. a repo admin),
-#     added under Settings -> Secrets and variables -> Actions.
+#   - main is protected by a ruleset requiring a PR for every change. Role-based bypass entries
+#     (e.g. "Repository admin") only apply to interactive/session-authenticated pushes - both a
+#     classic and a fine-grained personal access token were tried for the "Sync plugin manifest
+#     versions" step below and neither bypassed the rule (confirmed empirically: GH013 rejection
+#     either way), which matches GitHub's deliberate design - a leaked repo-secret PAT bypassing
+#     required review would defeat the point of the rule. A GitHub App installation token can be
+#     added to a ruleset's bypass list as an actual Integration actor, so that step instead needs:
+#       - A GitHub App created under your account (Settings -> Developer settings -> GitHub Apps),
+#         with repository permission Contents: Read and write, installed on this repo only.
+#       - Its App ID in a repo secret RELEASE_APP_ID, and a generated private key's full contents
+#         in a repo secret RELEASE_APP_PRIVATE_KEY (Settings -> Secrets and variables -> Actions).
+#       - The App added to the ruleset's bypass list for main (Settings -> Rules -> Rulesets ->
+#         Bypass list) - it appears there once installed, the same way Copilot's apps do.
 #   - See ci.yml's feasibility notes for the same windows-latest/native-toolchain assumptions this
 #     workflow shares.
 name: Release
@@ -40,6 +47,15 @@ jobs:
           $version = $tag.TrimStart('v')
           "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Generate release app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: sdaliyot
+          repositories: Scry.NET
+
       - name: Sync plugin manifest versions
         shell: pwsh
         # .claude-plugin/plugin.json and marketplace.json otherwise stay frozen at whatever version
@@ -47,18 +63,19 @@ jobs:
         # the sole "version" field in each file - correct for today's single-plugin marketplace.json;
         # would need to become entry-scoped if a second plugins[] entry with its own version is ever
         # added. Commits straight to main (not this tag) since that's what the marketplace install
-        # path (/plugin marketplace add) reads from. Pushes with GH_PUSH_TOKEN rather than the
-        # default GITHUB_TOKEN, because main's ruleset requires a PR for every change and has no
-        # bypass entry for the Actions identity - only for roles/Apps an admin's PAT already has.
+        # path (/plugin marketplace add) reads from. Pushes with the App installation token from the
+        # step above rather than the default GITHUB_TOKEN or a PAT - see this workflow's header
+        # comment for why: main's ruleset requires a PR for every change, and only an installed
+        # GitHub App (added to the ruleset's bypass list) actually bypasses that, not a PAT.
         #
-        # A failure here (e.g. GH_PUSH_TOKEN not granted an actual bypass) stops the whole release -
+        # A failure here (e.g. the App not granted an actual bypass) stops the whole release -
         # deliberately, so a broken manifest sync can't ship silently alongside a real release.
         # PowerShell does NOT stop or return a non-zero exit code just because a native command like
         # git fails, so every git call below is followed by an explicit $LASTEXITCODE check that
         # throws - otherwise this step would report success (green) even when the push silently
         # failed, which is what happened before this comment was added.
         env:
-          GH_PUSH_TOKEN: ${{ secrets.GH_PUSH_TOKEN }}
+          GH_PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           $ErrorActionPreference = "Stop"
           function Invoke-Checked([string]$Description) {
@@ -76,8 +93,10 @@ jobs:
 
           git diff --quiet -- .claude-plugin
           if ($LASTEXITCODE -ne 0) {
-              git config user.name "github-actions[bot]"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
+              # Attributed to the App itself (GitHub's bot-commit convention), not the generic
+              # github-actions[bot] identity - it's the App's installation token doing the push.
+              git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+              git config user.email "${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
               git remote set-url origin "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/sdaliyot/Scry.NET.git"
               try {
                   git fetch origin main; Invoke-Checked "git fetch"
