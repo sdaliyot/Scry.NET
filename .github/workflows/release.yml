@@ -33,7 +33,16 @@ jobs:
       contents: write # to create the GitHub Release and upload assets
       id-token: write # to mint a short-lived NuGet API key via Trusted Publishing
     steps:
+      # persist-credentials: false so the default GITHUB_TOKEN's Authorization header isn't left in
+      # the local git config (actions/checkout writes it as an http.<url>.extraheader by default,
+      # scoped by host/path, not the literal URL). Left in place, that header silently overrides the
+      # embedded x-access-token credential the "Sync plugin manifest versions" step's git push uses
+      # later, so every push there was very likely still authenticating as GITHUB_TOKEN regardless of
+      # which PAT or App token was actually set up - matching the GH013 rejections seen so far, and
+      # explaining why a manually-created PAT showed as "never used" despite the workflow running.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-dotnet@v4
         with:
