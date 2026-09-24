@@ -5,6 +5,12 @@
 # One-time setup this workflow depends on (not done by this file):
 #   - Register a NuGet Trusted Publishing policy at nuget.org (account -> Trusted Publishing):
 #     Repository Owner "sdaliyot", Repository "Scry.NET", Workflow File "release.yml".
+#   - main is protected by a ruleset requiring a PR for every change, with no bypass entry for
+#     GitHub Actions' own identity (rulesets only offer role-based or installed-App bypass actors,
+#     and the platform's Actions runner isn't an installable App in that sense). The "Sync plugin
+#     manifest versions" step below therefore needs a repo secret GH_PUSH_TOKEN: a personal access
+#     token (Contents: read/write) from an account with bypass privilege (e.g. a repo admin),
+#     added under Settings -> Secrets and variables -> Actions.
 #   - See ci.yml's feasibility notes for the same windows-latest/native-toolchain assumptions this
 #     workflow shares.
 name: Release
@@ -41,7 +47,11 @@ jobs:
         # the sole "version" field in each file - correct for today's single-plugin marketplace.json;
         # would need to become entry-scoped if a second plugins[] entry with its own version is ever
         # added. Commits straight to main (not this tag) since that's what the marketplace install
-        # path (/plugin marketplace add) reads from.
+        # path (/plugin marketplace add) reads from. Pushes with GH_PUSH_TOKEN rather than the
+        # default GITHUB_TOKEN, because main's ruleset requires a PR for every change and has no
+        # bypass entry for the Actions identity - only for roles/Apps an admin's PAT already has.
+        env:
+          GH_PUSH_TOKEN: ${{ secrets.GH_PUSH_TOKEN }}
         run: |
           $version = "${{ steps.version.outputs.version }}"
           foreach ($path in ".claude-plugin\plugin.json", ".claude-plugin\marketplace.json") {
@@ -56,11 +66,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               git config user.name "github-actions[bot]"
               git config user.email "github-actions[bot]@users.noreply.github.com"
+              git remote set-url origin "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/sdaliyot/Scry.NET.git"
               git fetch origin main
               git checkout main
               git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
               git commit -m "Bump plugin manifest version to $version"
               git push origin main
+              git remote set-url origin https://github.com/sdaliyot/Scry.NET.git
           }
 
       - name: Build native bootstrap DLL (both architectures)
