@@ -34,6 +34,35 @@ jobs:
           $version = $tag.TrimStart('v')
           "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Sync plugin manifest versions
+        shell: pwsh
+        # .claude-plugin/plugin.json and marketplace.json otherwise stay frozen at whatever version
+        # they were typed as originally, unrelated to the tag that actually shipped. Regex-replaces
+        # the sole "version" field in each file - correct for today's single-plugin marketplace.json;
+        # would need to become entry-scoped if a second plugins[] entry with its own version is ever
+        # added. Commits straight to main (not this tag) since that's what the marketplace install
+        # path (/plugin marketplace add) reads from.
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          foreach ($path in ".claude-plugin\plugin.json", ".claude-plugin\marketplace.json") {
+              $content = Get-Content $path -Raw
+              $updated = $content -replace '"version":\s*"[^"]+"', "`"version`": `"$version`""
+              if ($updated -ne $content) {
+                  Set-Content $path $updated -NoNewline
+              }
+          }
+
+          git diff --quiet -- .claude-plugin
+          if ($LASTEXITCODE -ne 0) {
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git fetch origin main
+              git checkout main
+              git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
+              git commit -m "Bump plugin manifest version to $version"
+              git push origin main
+          }
+
       - name: Build native bootstrap DLL (both architectures)
         shell: pwsh
         run: .\build-native.ps1 -Architecture all -Version ${{ steps.version.outputs.version }}
