@@ -417,6 +417,179 @@ public sealed class AttachIntegrationTests
     }
 
     /// <summary>
+    /// The WinForms counterpart to the WPF acceptance test above. Guards against a real regression:
+    /// <c>WinFormsDispatcher</c>'s constructor used to require <c>!owner.InvokeRequired</c>, but an
+    /// attach-mode injection's entry point runs on a freshly created thread in the target (never the
+    /// target's own UI thread - see docs/threat-model.md), so <c>DesktopAdapterWiring.ApplyWinForms</c>
+    /// calling <c>UseWinForms</c> from that thread made every <c>--adapters winforms</c> attach fail
+    /// unconditionally with <c>bootstrap_failed</c>. Nothing in the embedded-mode sample or test
+    /// fixture (<c>Scry.SampleWinForms</c>/<c>WinFormsFixture</c>) exercises this path, since embedded
+    /// hosts call <c>UseWinForms</c> from their own UI thread by construction - only an actual attach
+    /// does.
+    /// </summary>
+    [Fact]
+    public async Task Injects_agent_and_winforms_adapter_into_unmodified_net_framework_winforms_process()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            ProcessInspector.CurrentArchitecture != TargetArchitecture.X64)
+        {
+            return;
+        }
+
+        var root = FindRepositoryRoot();
+        var targetExecutable = Path.Combine(
+            root,
+            "samples",
+            "Scry.AttachWinFormsTarget",
+            "bin",
+            "Release",
+            "net462",
+            "Scry.AttachWinFormsTarget.exe");
+        var cliAssembly = Path.Combine(root, "src", "Scry.Cli", "bin", "Release", "net8.0", "scry.dll");
+        Assert.True(File.Exists(targetExecutable), $"Attach target is missing: {targetExecutable}");
+        Assert.True(
+            File.Exists(Path.Combine(
+                Path.GetDirectoryName(cliAssembly)!,
+                "native",
+                "win-x64",
+                "Scry.Injector.Native.dll")),
+            "Build the native x64 helper before running the attach integration test.");
+        Assert.True(
+            File.Exists(Path.Combine(
+                Path.GetDirectoryName(cliAssembly)!,
+                "payload",
+                "netfx",
+                "Scry.WinForms.dll")),
+            "The WinForms adapter must be staged beside the .NET Framework payload for --adapters winforms.");
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = targetExecutable,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start the WinForms attach target.");
+
+        var requestDirectory = Path.Combine(Path.GetTempPath(), $"scry-attach-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(requestDirectory);
+        try
+        {
+            // The target prints its PID from Form.HandleCreated, so this also serves as the signal
+            // that the control tree is actually there to be snapshotted.
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var reportedProcessId = await process.StandardOutput.ReadLineAsync(startupTimeout.Token);
+            Assert.Equal(process.Id.ToString(), reportedProcessId);
+
+            var alias = $"injected-winforms-test-{Guid.NewGuid():N}";
+            var attached = await RunCliAsync(
+                cliAssembly,
+                $"attach {process.Id} --alias {alias} --adapters winforms",
+                input: null,
+                TimeSpan.FromSeconds(60));
+            Assert.True(
+                attached.ExitCode == 0,
+                $"Attach failed ({attached.ExitCode}): {attached.StandardOutput}{attached.StandardError}");
+            using var attachJson = JsonDocument.Parse(attached.StandardOutput);
+            Assert.True(attachJson.RootElement.GetProperty("success").GetBoolean());
+            var target = attachJson.RootElement.GetProperty("target");
+            Assert.Equal(
+                (int)TargetRuntimeFamily.NetFramework,
+                target.GetProperty("runtimeFamily").GetInt32());
+            Assert.Equal((int)TargetArchitecture.X64, target.GetProperty("architecture").GetInt32());
+
+            // --adapters winforms has to do two separable things inside the target: register the
+            // winforms.* operations, and register the execution marshaller that backs "marshal": "ui".
+            // Assert both, because the first can succeed while the second silently does not.
+            var capabilities = await RunCliAsync(
+                cliAssembly,
+                $"capabilities --target {alias}",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            Assert.True(
+                capabilities.ExitCode == 0,
+                $"capabilities failed: {capabilities.StandardOutput}{capabilities.StandardError}");
+            using var capabilitiesJson = JsonDocument.Parse(capabilities.StandardOutput);
+            var result = capabilitiesJson.RootElement.GetProperty("result");
+            Assert.Contains(
+                "ui-thread-marshalling",
+                result.GetProperty("features").EnumerateArray().Select(item => item.GetString()));
+            Assert.Contains(
+                "winforms.snapshot",
+                result.GetProperty("registeredOperations")
+                    .EnumerateArray()
+                    .Select(item => item.GetProperty("name").GetString()));
+
+            // The control tree is the projection UI Automation cannot supply with the same fidelity
+            // (data bindings, owned forms), and is the reason the adapter exists.
+            var snapshot = await RunCliAsync(
+                cliAssembly,
+                $"winforms.snapshot --target {alias}",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            Assert.True(
+                snapshot.ExitCode == 0,
+                $"winforms.snapshot failed: {snapshot.StandardOutput}{snapshot.StandardError}");
+            using var snapshotJson = JsonDocument.Parse(snapshot.StandardOutput);
+            var snapshotResult = snapshotJson.RootElement.GetProperty("result");
+            Assert.Equal("managed-control-hierarchy", snapshotResult.GetProperty("projection").GetString());
+            Assert.Contains("attach-probe-button", snapshotResult.ToString());
+
+            // Without a marshaller this is WinForms' own thread affinity failing, not an endpoint
+            // restriction - assert it so the marshalled case below is a real A/B rather than a test
+            // that would pass either way. A plain property *read* like .Text doesn't reliably throw
+            // (WinForms, unlike WPF, only enforces thread affinity for operations that touch the
+            // window handle, such as this assignment - see the attach target's
+            // Control.CheckForIllegalCrossThreadCalls = true, which is what makes this deterministic
+            // rather than dependent on whether a debugger happens to be attached).
+            var unmarshalledRequest = Path.Combine(requestDirectory, "unmarshalled.json");
+            await File.WriteAllTextAsync(
+                unmarshalledRequest,
+                """{"source":"(System.Windows.Forms.Application.OpenForms[0].Text = \"changed\")"}""");
+            var unmarshalled = await RunCliAsync(
+                cliAssembly,
+                $"evaluate --target {alias} --request \"{unmarshalledRequest}\"",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            using var unmarshalledJson = JsonDocument.Parse(unmarshalled.StandardOutput);
+            Assert.False(unmarshalledJson.RootElement.GetProperty("success").GetBoolean());
+            Assert.Equal(
+                "operation_failed",
+                unmarshalledJson.RootElement.GetProperty("error").GetProperty("code").GetString());
+
+            var marshalledRequest = Path.Combine(requestDirectory, "marshalled.json");
+            await File.WriteAllTextAsync(
+                marshalledRequest,
+                """{"source":"(System.Windows.Forms.Application.OpenForms[0].Text = \"changed\")","marshal":"ui"}""");
+            var marshalled = await RunCliAsync(
+                cliAssembly,
+                $"evaluate --target {alias} --request \"{marshalledRequest}\"",
+                input: null,
+                TimeSpan.FromSeconds(30));
+            Assert.True(
+                marshalled.ExitCode == 0,
+                $"Marshalled evaluate failed: {marshalled.StandardOutput}{marshalled.StandardError}");
+            using var marshalledJson = JsonDocument.Parse(marshalled.StandardOutput);
+            Assert.Equal(
+                "changed",
+                marshalledJson.RootElement.GetProperty("result")
+                    .GetProperty("value")
+                    .GetProperty("value")
+                    .GetString());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+
+            Directory.Delete(requestDirectory, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// The end-to-end proof for AppDomain targeting: <c>Scry.MultiDomainAttachTarget</c> carries a
     /// second AppDomain ("PluginDomain") with a type loaded only there
     /// (<c>Scry.MultiDomainAttachTarget.Plugin.PluginMarker</c>) and never referenced from the

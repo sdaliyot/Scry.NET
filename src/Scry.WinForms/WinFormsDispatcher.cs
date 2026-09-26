@@ -21,12 +21,15 @@ public sealed class WinFormsDispatcher
             throw new InvalidOperationException(
                 "The Windows Forms dispatcher owner must have a created handle.");
         }
-        if (owner.InvokeRequired)
-        {
-            throw new InvalidOperationException(
-                "Create the Windows Forms dispatcher on the owner's UI thread.");
-        }
 
+        // Deliberately no owner.InvokeRequired check here (unlike the embedded sample's own usage,
+        // which does construct on the owner's UI thread) - see Scry.Wpf.WpfDispatcher, which is
+        // likewise thread-agnostic at construction and only checks CheckAccess() per invocation.
+        // An attach-mode injection's entry point never runs on the target's UI thread (it runs on a
+        // freshly created thread - see docs/threat-model.md), so requiring on-thread construction
+        // made DesktopAdapterWiring.ApplyWinForms (which calls UseWinForms from that entry point)
+        // fail unconditionally. A Control handle can be safely captured from any thread; only
+        // actual member access needs to marshal, which InvokeAsync below already does.
         _owner = owner;
     }
 
