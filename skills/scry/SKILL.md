@@ -49,6 +49,7 @@ changed this time"; the existing install (if any) is always what gets returned.
 >
 >     $envVar = if ($Architecture -eq "x86") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
 >     $repo = "sdaliyot/Scry.NET"
+>     Write-Host "Resolving scry.exe for architecture $Architecture..."
 >
 >     function Resolve-ScryExe([string]$dir) {
 >         $path = if (Test-Path $dir -PathType Leaf) { $dir } else { Join-Path $dir "scry.exe" }
@@ -61,13 +62,16 @@ changed this time"; the existing install (if any) is always what gets returned.
 >     foreach ($scope in 'Process', 'User', 'Machine') {
 >         $dir = [Environment]::GetEnvironmentVariable($envVar, $scope)
 >         if (![string]::IsNullOrWhiteSpace($dir)) {
+>             Write-Host "Checking $scope environment variable $envVar: $dir"
 >             $exePath = Resolve-ScryExe $dir
 >             if ($exePath) { break }
 >         }
 >     }
 >     if (-not $exePath) {
+>         Write-Host "scry.exe not found in environment variables; checking PATH..."
 >         $cmd = Get-Command scry -ErrorAction SilentlyContinue
 >         if ($cmd) { $exePath = $cmd.Source }
+>         Write-Host "Resolved scry.exe path: $exePath"
 >     }
 >
 >     $targetDir = if ($exePath) { Split-Path $exePath -Parent } else { Join-Path $env:LOCALAPPDATA "Scry.NET\$Architecture" }
@@ -77,6 +81,7 @@ changed this time"; the existing install (if any) is always what gets returned.
 >     if ($exePath) {
 >         $lastChecked = if (Test-Path $stampPath) { Get-Date (Get-Content $stampPath -Raw) } else { $null }
 >         if ($lastChecked -and ((Get-Date) - $lastChecked) -lt (New-TimeSpan -Hours 24)) {
+>             Write-Host "scry.exe was last checked at $lastChecked; skipping network check."
 >             return $exePath
 >         }
 >     }
@@ -84,9 +89,12 @@ changed this time"; the existing install (if any) is always what gets returned.
 >     # 3. Ask GitHub for the latest release. Any failure here (offline, rate-limited) just means
 >     #    "can't check right now" - keep whatever's already installed rather than fail the attach.
 >     try {
+>         Write-Host "Fetching latest release information from GitHub for $repo..."
 >         $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
 >     } catch {
+>         Write-Host "Failed to fetch latest release information from GitHub: $_"
 >         if ($exePath) {
+>             Write-Host "Using existing scry.exe at $exePath despite GitHub fetch failure."
 >             Set-Content $stampPath (Get-Date -Format "o")
 >             return $exePath
 >         }
@@ -94,13 +102,17 @@ changed this time"; the existing install (if any) is always what gets returned.
 >     }
 >
 >     $latest = $release.tag_name.TrimStart('v')
+>     Write-Host "Latest release from GitHub: $latest"
 >     if ($exePath) {
 >         $installed = (& $exePath --version).Trim()
 >         if ($installed -eq $latest) {
+>             Write-Host "scry.exe is up-to-date ($installed)."
 >             Set-Content $stampPath (Get-Date -Format "o")
 >             return $exePath
 >         }
 >         Write-Host "scry $installed -> $latest available; updating $targetDir..."
+>     } else {
+>         Write-Host "scry.exe not currently installed; installing $latest to $targetDir..."
 >     }
 >
 >     $asset = $release.assets | Where-Object { $_.name -eq "scry-win-$Architecture.zip" }
@@ -127,7 +139,9 @@ changed this time"; the existing install (if any) is always what gets returned.
 >
 >     try {
 >         $zipPath = Join-Path $env:TEMP "scry-win-$Architecture-$($release.tag_name).zip"
+>         Write-Host "Downloading scry-win-$Architecture-$($release.tag_name).zip to $zipPath"
 >         Invoke-WebRequest $asset.browser_download_url -OutFile $zipPath
+>         Write-Host "Extracting $zipPath to $targetDir"
 >         Expand-Archive $zipPath -DestinationPath $targetDir -Force
 >         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 >     } catch {
