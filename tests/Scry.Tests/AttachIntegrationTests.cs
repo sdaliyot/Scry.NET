@@ -417,15 +417,26 @@ public sealed class AttachIntegrationTests
     }
 
     /// <summary>
-    /// The WinForms counterpart to the WPF acceptance test above. Guards against a real regression:
-    /// <c>WinFormsDispatcher</c>'s constructor used to require <c>!owner.InvokeRequired</c>, but an
-    /// attach-mode injection's entry point runs on a freshly created thread in the target (never the
-    /// target's own UI thread - see docs/threat-model.md), so <c>DesktopAdapterWiring.ApplyWinForms</c>
-    /// calling <c>UseWinForms</c> from that thread made every <c>--adapters winforms</c> attach fail
-    /// unconditionally with <c>bootstrap_failed</c>. Nothing in the embedded-mode sample or test
-    /// fixture (<c>Scry.SampleWinForms</c>/<c>WinFormsFixture</c>) exercises this path, since embedded
-    /// hosts call <c>UseWinForms</c> from their own UI thread by construction - only an actual attach
-    /// does.
+    /// The WinForms counterpart to the WPF acceptance test above. Guards against two real
+    /// regressions, both only reachable through an actual attach - nothing in the embedded-mode
+    /// sample or test fixture (<c>Scry.SampleWinForms</c>/<c>WinFormsFixture</c>) exercises either,
+    /// since embedded hosts call <c>UseWinForms</c> themselves, from their own UI thread, on
+    /// whichever form they choose:
+    /// <list type="number">
+    /// <item><c>WinFormsDispatcher</c>'s constructor used to require <c>!owner.InvokeRequired</c>,
+    /// but an attach-mode injection's entry point runs on a freshly created thread in the target
+    /// (never the target's own UI thread - see docs/threat-model.md), so
+    /// <c>DesktopAdapterWiring.ApplyWinForms</c> calling <c>UseWinForms</c> from that thread made
+    /// every <c>--adapters winforms</c> attach fail unconditionally with
+    /// <c>bootstrap_failed</c>.</item>
+    /// <item><c>ApplyWinForms</c> used to take <c>Application.OpenForms.FirstOrDefault()</c> as the
+    /// dispatcher owner with no regard for visibility or which thread it lives on. A real bug report
+    /// hit exactly this: a third-party UI library's hidden utility window, created on its own
+    /// dedicated thread before the application's real main form, landed at index 0 and silently
+    /// became the marshal owner - every UI-marshalled call was then wired to the wrong thread's
+    /// message loop. The attach target below reproduces that ordering deliberately (see its
+    /// Program.cs).</item>
+    /// </list>
     /// </summary>
     [Fact]
     public async Task Injects_agent_and_winforms_adapter_into_unmodified_net_framework_winforms_process()
@@ -542,10 +553,25 @@ public sealed class AttachIntegrationTests
             // window handle, such as this assignment - see the attach target's
             // Control.CheckForIllegalCrossThreadCalls = true, which is what makes this deterministic
             // rather than dependent on whether a debugger happens to be attached).
+            //
+            // Selecting the form by name ("main"), not Application.OpenForms[0], is itself part of
+            // what this test guards: the attach target deliberately creates a hidden decoy form on
+            // its own separate thread before "main" (see its Program.cs), landing it at OpenForms[0]
+            // - a real bug report against this exact ordering. DesktopAdapterWiring.ApplyWinForms
+            // used to take OpenForms.FirstOrDefault() as the dispatcher owner with no regard for
+            // visibility, wiring every UI-marshalled call to the decoy's thread instead of "main"'s -
+            // this would fail exactly the assertion below, with "changed" applied to the decoy
+            // instead of a cross-thread exception if a naive fix instead marshalled to whichever
+            // thread [0] happened to live on.
+            // Already JSON-escaped (literal backslash-quote), because it's interpolated directly
+            // into a raw JSON string literal below rather than JSON-serialized.
+            var mainForm =
+                "System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>()" +
+                ".Single(f => f.Name == \\\"main\\\")";
             var unmarshalledRequest = Path.Combine(requestDirectory, "unmarshalled.json");
             await File.WriteAllTextAsync(
                 unmarshalledRequest,
-                """{"source":"(System.Windows.Forms.Application.OpenForms[0].Text = \"changed\")"}""");
+                $$"""{"source":"({{mainForm}}.Text = \"changed\")"}""");
             var unmarshalled = await RunCliAsync(
                 cliAssembly,
                 $"evaluate --target {alias} --request \"{unmarshalledRequest}\"",
@@ -560,7 +586,7 @@ public sealed class AttachIntegrationTests
             var marshalledRequest = Path.Combine(requestDirectory, "marshalled.json");
             await File.WriteAllTextAsync(
                 marshalledRequest,
-                """{"source":"(System.Windows.Forms.Application.OpenForms[0].Text = \"changed\")","marshal":"ui"}""");
+                $$"""{"source":"({{mainForm}}.Text = \"changed\")","marshal":"ui"}""");
             var marshalled = await RunCliAsync(
                 cliAssembly,
                 $"evaluate --target {alias} --request \"{marshalledRequest}\"",

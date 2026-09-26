@@ -82,13 +82,29 @@ internal static class DesktopAdapterWiring
 
     private static void ApplyWinForms(EndpointBuilder builder)
     {
-        // UseWinForms needs a Control to marshal through. The first open form is the closest
-        // equivalent to WPF's Application.Current and likewise needs no cooperation.
+        // UseWinForms needs a Control to marshal through. Application.OpenForms is ordered by
+        // creation, not by which form is the application's "main" one - a hidden utility/listener
+        // form (observed in practice: a third-party UI library's own internal theme-change
+        // listener window, created before the application's real main form and left permanently
+        // invisible) can end up first and silently become the marshal owner. Every UI-marshalled
+        // call then targets that hidden form's handle instead of a form anyone is actually
+        // driving, and since nothing ever shows, activates, or otherwise pumps it any differently
+        // from before, calls marshalled through it can hang rather than fail fast. Prefer the
+        // first *visible* open form; only fall back to the first form of any visibility when none
+        // are visible yet (e.g. attaching before the main form has shown), which keeps the
+        // original behavior for that edge case.
         var applicationType = RequireLoadedType("System.Windows.Forms", "System.Windows.Forms.Application");
         var openForms = applicationType
             .GetProperty("OpenForms", BindingFlags.Public | BindingFlags.Static)
             ?.GetValue(null);
-        var owner = (openForms as System.Collections.IEnumerable)?.Cast<object>().FirstOrDefault();
+        var forms = (openForms as System.Collections.IEnumerable)?.Cast<object>().ToArray()
+            ?? Array.Empty<object>();
+        var controlType = RequireLoadedType("System.Windows.Forms", "System.Windows.Forms.Control");
+        var visibleProperty = controlType.GetProperty("Visible", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException(
+                "System.Windows.Forms.Control.Visible was not found by reflection.");
+        var owner = forms.FirstOrDefault(form => (bool)visibleProperty.GetValue(form)!)
+            ?? forms.FirstOrDefault();
         if (owner is null)
         {
             throw new InvalidOperationException(
@@ -97,7 +113,6 @@ internal static class DesktopAdapterWiring
                 "without --adapters.");
         }
 
-        var controlType = RequireLoadedType("System.Windows.Forms", "System.Windows.Forms.Control");
         InvokeRegistration(
             "Scry.WinForms",
             "Scry.WinForms.WinFormsEndpointBuilderExtensions",

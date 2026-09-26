@@ -25,6 +25,34 @@ internal static class Program
         // attach test that exercises "marshal": "ui" is actually proving something.
         Control.CheckForIllegalCrossThreadCalls = true;
 
+        // Reproduces a real bug report: some third-party UI libraries create their own hidden
+        // utility window on their own dedicated STA thread and message loop before the
+        // application's real main form exists - Application.OpenForms is process-wide, not
+        // per-thread, so that hidden form can land at index 0. DesktopAdapterWiring.ApplyWinForms
+        // used to just take Application.OpenForms.FirstOrDefault() as the marshal owner, wiring
+        // every UI-marshalled call to the wrong thread's message loop instead of the one the real
+        // form (and its controls) actually lives on. Starting this before the main form below is
+        // what makes that ordering adversarial on purpose.
+        using var listenerReady = new ManualResetEventSlim();
+        var listenerThread = new Thread(() =>
+        {
+            // Application.OpenForms membership is registered by Show(), not just handle creation -
+            // Show, then Hide immediately, to land in OpenForms while ending up genuinely hidden
+            // (Visible false), matching the real report. Application.Run(Form) would instead leave
+            // it shown for the rest of the process, which is not the scenario being reproduced.
+            using var listener = new Form { Name = "hidden-listener", ShowInTaskbar = false };
+            listener.Show();
+            listener.Hide();
+            listenerReady.Set();
+            Application.Run();
+        })
+        {
+            IsBackground = true
+        };
+        listenerThread.SetApartmentState(ApartmentState.STA);
+        listenerThread.Start();
+        listenerReady.Wait(TimeSpan.FromSeconds(10));
+
         var button = new Button { Name = ProbeButtonName, Text = "Probe" };
 
         using var form = new Form
