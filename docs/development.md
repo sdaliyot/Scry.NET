@@ -389,8 +389,8 @@ failed request with a non-zero exit code.
 | `invoke` | root/reference + member + arguments, or registeredOperation + arguments; asReference |
 | `enumerate` | root/reference, offset, limit (1-1000), asReferences |
 | `release` | handleId or handleIds |
-| `evaluate` | source, imports, references, timeoutMilliseconds, marshal |
-| `execute` | source, imports, references, timeoutMilliseconds, marshal |
+| `evaluate` | source, imports, references, timeoutMilliseconds, marshal, arguments |
+| `execute` | source, imports, references, timeoutMilliseconds, marshal, arguments |
 | `wait` | source, operator, expected, timeoutMilliseconds, pollIntervalMilliseconds, imports, references, marshal |
 | `assert` | source, operator, expected, imports, references, marshal |
 | `load-assembly` | absolute path, loadPolicy (`default` or `isolated`) |
@@ -461,7 +461,7 @@ Context.Log("message", "information")
 
 Registered root factories are evaluated once at the start of each execution. `Resolve` enforces the current target/session handle scope. Logs are bounded by entry count and message length and report dropped entries. Compilation failures use the normal failure envelope with code `compilation_failed` and structured diagnostics containing ID, severity, message, and one-based source spans. Exceptions thrown by compiled code use the ordinary recursive exception envelope: `InnerException` is followed to a depth of `ExceptionDetail.MaximumDepth` (8), past which a node reports `Truncated: true` rather than continuing, and message/stack-trace text is capped independently, so an unusually deep or verbose exception is reported in bounded form rather than risking the JSON depth limit or frame size cap and failing to serialize at all. An `AggregateException` reports every one of its faults (also capped at 8, with the count of any dropped) in `InnerExceptions`, and `InnerException` still holds the first fault for a caller that only looks there.
 
-Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context, the injected agent's host context, or the .NET Framework default AppDomain. Dynamic, native, and unreadable modules are skipped. On modern .NET, unrelated non-default-context modules are skipped unless the request's `loadContext` names that context - otherwise Roslyn could bind script code to the wrong copy of an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded; they do not load files. Use `load-assembly` with the `default` policy first when code must name its types.
+Roslyn metadata references come only from compatible, file-backed managed assemblies already loaded in the target's default load context, the injected agent's host context, or the .NET Framework default AppDomain. Dynamic, native, and unreadable modules are skipped. On modern .NET, unrelated non-default-context modules are skipped unless the request's `loadContext` names that context - otherwise Roslyn could bind script code to the wrong copy of an existing isolated-context assembly instance. Optional `references` entries validate that named compatible target assemblies are loaded, and, when non-empty, narrow the compiled reference set to only those assemblies plus `Scry.Runtime`'s own direct dependency closure (`AssemblyCatalog.GetMetadataReferences`) - not the request's own file loading, which stays `load-assembly`'s job. The runtime-dependency union is required, not incidental: `DefaultImports` always imports `System`/`System.Linq`/etc., and Roslyn's scripting API has no implicit "the core library is always available" fallback, so narrowing without it would break even a script that never touches the caller's own assembly. Use `load-assembly` with the `default` policy first when code must name its types.
 
 Timeouts and cancellation are cooperative. The configured server deadline cancels `Context.CancellationToken` and Roslyn async execution; target shutdown also cancels it. Code that awaits with the token observes `execution_timed_out`. Cancelling `ScryClient.RequestAsync` cancels local pipe I/O and faults that client connection, but protocol version 1 has no request-cancellation frame, so it does not claim to cancel work already executing in the target. Synchronous code - or a marshalled submission that never observes cancellation while holding the host's UI thread - cannot be forcibly stopped inside the target process. Scry does not claim process isolation or hard timeouts.
 
@@ -496,12 +496,26 @@ zero:
 - `ScriptCache` caches the compiled `Script` by source, imports and explicit references, bounded
   by `MaximumCachedScripts` (default 64) with approximate least-recently-used eviction. The key
   uses the already-wrapped source, so an `evaluate` expression and an `execute` statement body
-  with the same text cannot share an entry.
+  with the same text cannot share an entry. `arguments` is deliberately excluded from the key (see
+  below), and is the intended way to vary a call without paying for a fresh compile.
 
 Only successful compilations are cached, which is what keeps this honest in a process that is
 still loading assemblies: a submission that failed to compile because its type was not loaded yet
 is recompiled next time and can then succeed, while a submission that already compiled stays valid
 because the assemblies it bound to cannot be unloaded from the default AppDomain.
+
+A caller that instead bakes a runtime-varying literal directly into `source` (a workspace name, an
+id) defeats the cache entirely - every distinct value is a permanent cache miss, and each of up to
+`MaximumCachedScripts` entries retains its own independently-bound Roslyn symbol graph (Roslyn does
+not share bound symbols across `Compilation`/`Script` instances) against whatever the reference set
+was at compile time. Against a real application with a few hundred loaded assemblies and several
+dozen such distinct calls, this measured as multiple hundred megabytes of process growth. Two
+independent things curb it: `arguments` (above) keeps the source text - and therefore the cache key
+- constant across calls that only vary data, and a specific `references` list keeps each compile's
+own reference set (and so its retained symbol graph) small regardless of how many distinct scripts
+end up cached. Neither helps a script that varies by source text for a reason `arguments` cannot
+express, such as a caller-supplied predicate spliced into control flow - only a narrow `references`
+list helps that case.
 
 `ExecutionResult.CompilationCached` reports which path a submission took, so a caller can tell a
 fast repeat from a cold compile, and tests can assert the behaviour without relying on timing.

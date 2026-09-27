@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Scry.Contracts;
 
 /// <summary>
@@ -21,13 +23,22 @@ public static class ExecutionMarshalTargets
 /// .NET Framework, which has no load contexts; use <c>--appdomain</c> / <c>appdomain.start</c> there
 /// instead.
 /// </param>
+/// <param name="Arguments">
+/// Named JSON values the script reads via <c>Context.GetArgument&lt;T&gt;(name)</c>, instead of
+/// string-substituting a varying literal into <see cref="Source"/> itself. Deliberately not part of
+/// the script cache key (see <c>ScriptCacheKey</c>): the same script text called repeatedly with
+/// different argument values is still a cache hit, which is the whole point - a caller whose only
+/// per-call variation is a data value (a name, an id, a flag) should never need a fresh compile for
+/// it.
+/// </param>
 public sealed record ExecutionRequest(
     string Source,
     IReadOnlyList<string>? Imports = null,
     IReadOnlyList<string>? References = null,
     int? TimeoutMilliseconds = null,
     string? Marshal = null,
-    string? LoadContext = null);
+    string? LoadContext = null,
+    JsonElement? Arguments = null);
 
 /// <param name="CompilationCached">
 /// True when the submission reused an already-compiled script rather than compiling. Lets a caller

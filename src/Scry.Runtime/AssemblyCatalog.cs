@@ -233,6 +233,35 @@ internal sealed class AssemblyCatalog
                         $"Assembly reference '{selector}' is not eligible for C# execution: it must be file-backed, not generated at run time, and loaded in the default load context, the runtime's own context, or the requested loadContext.");
                 }
             }
+
+            // Narrow to what the caller actually asked for, plus whatever this runtime assembly
+            // itself depends on. DefaultImports (ExecutionEngine) always imports "Scry.Contracts"
+            // and "Scry.Runtime", and Roslyn's scripting API has no implicit "the core library is
+            // always available" fallback the way an ordinary project reference does - every type a
+            // script binds to, including System.Object itself, needs an explicit MetadataReference.
+            // Scry.Runtime.dll's own compiled dependencies already need exactly that always-needed
+            // baseline (mscorlib/System.Core on .NET Framework, System.Private.CoreLib plus the
+            // System.* facade assemblies on modern .NET) to compile at all, so its direct-reference
+            // closure is a reliable stand-in for "what every script needs regardless of what the
+            // caller's own application is" - the caller's selectors only need to name their own
+            // application's assemblies on top of it.
+            var runtimeBaselineNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                typeof(AssemblyCatalog).Assembly.GetName().Name ?? string.Empty
+            };
+            foreach (var referenced in typeof(AssemblyCatalog).Assembly.GetReferencedAssemblies())
+            {
+                if (referenced.Name is { Length: > 0 } name)
+                {
+                    runtimeBaselineNames.Add(name);
+                }
+            }
+
+            assemblies = assemblies
+                .Where(assembly =>
+                    runtimeBaselineNames.Contains(assembly.GetName().Name ?? string.Empty) ||
+                    selectors.Any(selector => AssemblyMatches(assembly, selector)))
+                .ToArray();
         }
 
         var references = new List<MetadataReference>();

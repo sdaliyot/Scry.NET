@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
@@ -10,18 +11,25 @@ namespace Scry.Runtime;
 
 public sealed class ScryExecutionContext
 {
+    /// <summary>Used when a request omits <c>arguments</c>, so <see cref="Arguments"/> always has a
+    /// well-defined <see cref="JsonValueKind.Object"/> rather than <see cref="JsonValueKind.Undefined"/>.
+    /// Never disposed - a single parsed constant kept for the process lifetime.</summary>
+    private static readonly JsonElement EmptyArguments = JsonDocument.Parse("{}").RootElement;
+
     private readonly Func<ExternalReference, object> _resolver;
     private readonly ExecutionLogBuffer _logs;
 
     internal ScryExecutionContext(
         string sessionId,
         IReadOnlyDictionary<string, object?> roots,
+        JsonElement? arguments,
         Func<ExternalReference, object> resolver,
         CancellationToken cancellationToken,
         ExecutionLogBuffer logs)
     {
         SessionId = sessionId;
         Roots = roots;
+        Arguments = arguments ?? EmptyArguments;
         _resolver = resolver;
         CancellationToken = cancellationToken;
         _logs = logs;
@@ -31,12 +39,30 @@ public sealed class ScryExecutionContext
 
     public IReadOnlyDictionary<string, object?> Roots { get; }
 
+    /// <summary>The request's <c>arguments</c> object, or an empty object when omitted.</summary>
+    public JsonElement Arguments { get; }
+
     public CancellationToken CancellationToken { get; }
 
     public object? GetRoot(string name) =>
         Roots.TryGetValue(name, out var value)
             ? value
             : throw new KeyNotFoundException($"Registered root '{name}' does not exist.");
+
+    /// <summary>
+    /// Reads a named value from <see cref="Arguments"/>, deserialized as <typeparamref name="T"/>.
+    /// This is how a script should receive a runtime-varying value instead of having it
+    /// string-substituted into the script's own source - see <see cref="Arguments"/>.
+    /// </summary>
+    public T GetArgument<T>(string name)
+    {
+        if (Arguments.ValueKind != JsonValueKind.Object || !Arguments.TryGetProperty(name, out var value))
+        {
+            throw new KeyNotFoundException($"Argument '{name}' does not exist.");
+        }
+
+        return JsonSerializer.Deserialize<T>(value, ScryJson.Options)!;
+    }
 
     public object Resolve(ExternalReference reference)
     {
@@ -130,6 +156,7 @@ internal sealed class ExecutionEngine
         var context = new ScryExecutionContext(
             session.Id,
             roots,
+            request.Arguments,
             session.Resolve,
             executionToken,
             logs);

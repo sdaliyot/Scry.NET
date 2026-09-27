@@ -92,6 +92,11 @@ internal sealed class ScriptCache(int maximumEntries)
 /// Everything that affects how a submission compiles. The globals type is fixed, and the ambient
 /// loaded-assembly set is deliberately not part of the key - see <see cref="ScriptCache"/> for why
 /// a successful compilation stays valid as the process loads more assemblies.
+/// <c>ExecutionRequest.Arguments</c> is likewise deliberately not part of the key: it is per-call
+/// data, not something that changes how the submission's source compiles, so the same script body
+/// called repeatedly with different argument values should stay a cache hit rather than force a
+/// fresh compile - that is the entire reason arguments exist instead of string-substituting a
+/// varying literal into <c>Source</c> itself.
 /// </summary>
 internal readonly struct ScriptCacheKey : IEquatable<ScriptCacheKey>
 {

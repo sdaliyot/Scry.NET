@@ -812,10 +812,11 @@ internal static class CliContract
             [
                 F("source", "string", true, "C# source."),
                 F("imports", "string[]", false, "Additional allowed namespaces."),
-                F("references", "string[]", false, "Already-loaded compatible assembly names."),
+                F("references", "string[]", false, "Already-loaded compatible assembly names. Narrows compilation to only these plus whatever Scry.NET's own runtime needs - omit to compile against every loaded compatible assembly instead. Naming the specific assembly a script needs compiles faster and keeps the script cache's memory footprint down."),
                 F("timeoutMilliseconds", "integer", false, "Cooperative target timeout."),
                 F("marshal", "ui", false, "Run the submission on the host UI thread, which is what lets it touch a DependencyObject or a Control. Occupies that thread for the whole submission, so keep it short; timeoutMilliseconds cannot interrupt work already running there."),
-                F("loadContext", "string", false, "Modern .NET only: also bind execution references against this AssemblyLoadContext, named as list-assemblies/find-types report it (e.g. an isolated context from load-assembly --loadPolicy isolated). Widens the eligible reference set; rejected on .NET Framework.")
+                F("loadContext", "string", false, "Modern .NET only: also bind execution references against this AssemblyLoadContext, named as list-assemblies/find-types report it (e.g. an isolated context from load-assembly --loadPolicy isolated). Widens the eligible reference set; rejected on .NET Framework."),
+                F("arguments", "object", false, "Named JSON values the script reads via Context.GetArgument<T>(name), instead of string-substituting a varying literal into source. Not part of the script cache key: the same source called repeatedly with different arguments stays a cache hit.")
             ],
             result,
             example);

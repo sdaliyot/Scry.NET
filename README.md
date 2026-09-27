@@ -576,6 +576,17 @@ is the form to use when the submission needs fields alongside the source, such a
 translate to their registered structured operations and return their structured adapter
 result inline before the ephemeral CLI session closes.
 
+**Prefer a fixed script plus `arguments` over baking a varying literal into `source`.** A caller
+that repeats the same script shape many times with only a data value changing (a name, an id, a
+flag) should send one fixed `source` and vary `arguments`, read back via
+`Context.GetArgument<T>(name)` - `arguments` is deliberately not part of the script cache, so the
+same source stays a compile-once cache hit regardless of how many distinct argument values it's
+called with. Passing a specific `references` list (the target's own assembly name) rather than
+relying on the full default set compiles faster and keeps memory down, and is what actually helps a
+script that still varies by source text for other reasons (a caller-supplied predicate expression,
+say). See "C# execution" in [`skills/scry/SKILL.md`](skills/scry/SKILL.md) for the full explanation
+and examples.
+
 AI coding agents should follow the comprehensive
 [`skills/scry/SKILL.md`](skills/scry/SKILL.md) workflow. It covers discovery and safe
 target selection, structured inspection before code execution, desktop and non-UI

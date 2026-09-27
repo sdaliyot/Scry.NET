@@ -783,13 +783,39 @@ Execution settings request:
 }
 ```
 
-On modern .NET, `evaluate`/`execute` bind by default only against the default
-`AssemblyLoadContext` and the runtime's own. To reference a type from another context - for
+`references`, when non-empty, narrows compilation to only those named assemblies plus whatever
+Scry.NET's own runtime needs (the core library and its own dependencies) - it is not an addition on
+top of every loaded assembly. Naming the specific assembly a script actually needs compiles faster
+and keeps the script cache's memory footprint down; omitting it compiles against every loaded
+compatible assembly instead, which is fine occasionally but adds up across many distinct cached
+scripts in a long session. On modern .NET, `evaluate`/`execute` bind by default only against the
+default `AssemblyLoadContext` and the runtime's own. To reference a type from another context - for
 example one loaded via `load-assembly --loadPolicy isolated` - add `loadContext` naming that
 context (the same name `list-assemblies`/`find-types`/`describe-type` report) alongside its
-assembly in `references`. This widens the eligible set; it never narrows it, and it is rejected
-with `load_context_not_supported` on .NET Framework, which has no load contexts. It is unrelated
-to `--appdomain`, which targets a .NET Framework AppDomain, not a load context.
+assembly in `references`. `loadContext` only widens which load contexts are eligible (never
+narrows it on its own); combined with a non-empty `references` list, the two together are what
+actually narrows the final compiled set. `loadContext` is rejected with
+`load_context_not_supported` on .NET Framework, which has no load contexts. It is unrelated to
+`--appdomain`, which targets a .NET Framework AppDomain, not a load context.
+
+**Prefer a fixed script body with `arguments` over string-substituting values into `source`.** A
+building-block-style caller that repeats the same script shape with only a literal changing (a
+workspace name, a section tag, an id) should send one fixed `source` and vary `arguments` instead:
+
+```json
+{
+  "source": "return Context.GetRoot(\"app\").Navigate(Context.GetArgument<string>(\"section\"));",
+  "arguments": { "section": "Alerts" }
+}
+```
+
+`Context.GetArgument<T>(name)` reads a named value back out. This matters beyond convenience:
+`arguments` is deliberately not part of the script cache key, so the same `source` called
+repeatedly with different argument values is always a cache hit - a script whose `source` instead
+embeds the varying literal directly is always a fresh compile, and each compile binds against the
+full reference set above. A caller that instead splices arbitrary caller-supplied code into control
+flow (a boolean predicate expression, free-text embedded in a condition) still varies by source
+text regardless of `arguments` - a specific `references` list is what actually helps those cases.
 
 Timeouts are cooperative, not process isolation. Synchronous target code that ignores
 cancellation keeps running in the target - especially serious for a `"marshal": "ui"`
