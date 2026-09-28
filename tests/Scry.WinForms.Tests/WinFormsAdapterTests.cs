@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Windows.Forms;
 using Scry.Contracts;
+using Scry.Endpoint;
+using Scry.Client;
 using Scry.WinForms;
 
 namespace Scry.WinForms.Tests;
@@ -117,6 +119,132 @@ public sealed class WinFormsAdapterTests
                 Application.ExitThread();
                 return true;
             });
+            thread.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    /// <summary>
+    /// Guards against a real regression, distinct from the one above: closing the owner form when
+    /// *no other form is open yet* makes <c>WinFormsDispatcher.ResolveOwner</c> throw (there is
+    /// nothing to recover through in that instant), and that throw used to be a bare
+    /// <see cref="InvalidOperationException"/> - not classifiable by
+    /// <c>OperationDispatcher.EvaluateConditionAsync</c>'s <c>wait</c>-loop tolerance (added in
+    /// 92b9043 for <c>execution_timed_out</c>), so it fell into the generic <c>operation_failed</c>
+    /// bucket and failed the whole <c>wait</c> outright on the very first iteration that hit the
+    /// gap. This is exactly the case the owner-recovery fix (4f17386) was meant to handle
+    /// end-to-end: a login dialog closes, its replacement hasn't appeared yet, and a caller
+    /// <c>wait</c>ing for the new window should keep polling through that gap, not fail.
+    /// <para>
+    /// Exercises the *generic* <c>wait</c> operation (<c>OperationDispatcher.EvaluateConditionAsync</c>,
+    /// via <c>"marshal": "ui"</c>) rather than <c>WinFormsAdapter</c>'s own separate
+    /// <c>winforms.wait</c> polling loop, which is a different mechanism with no
+    /// <c>execution_timed_out</c>/<c>dispatcher_owner_unavailable</c> tolerance of its own - the
+    /// bug report and fix are specifically about the generic path.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Wait_survives_a_zero_forms_gap_when_a_replacement_form_opens_in_time()
+    {
+        Form? first = null;
+        Form? second = null;
+        const string condition =
+            "System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>()" +
+            ".Any(f => f.Name == \"second\")";
+        var uiReady = new TaskCompletionSource<Form>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Set by the test *after* it has confirmed "first" is closed (see below) - read by the
+        // polling timer on the UI thread. This is what makes the gap deterministic rather than a
+        // wall-clock guess: a cold Roslyn compile can itself take several seconds under load
+        // (observed directly while writing this test), which would blow past any fixed delay
+        // chosen up front. Ticking every 50ms and only *counting* once armed decouples "how long
+        // until second opens" from "how long the warmup/close before it took".
+        var armedAt = -1;
+        var ticks = 0;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                first = new Form { Name = "first", Text = "First" };
+                first.Show();
+                uiReady.SetResult(first);
+
+                // Polls the flag above from this UI thread's own message loop, rather than being
+                // marshalled in from outside - closing "first" removes the only Control this test
+                // could otherwise BeginInvoke through.
+                var pollTimer = new System.Windows.Forms.Timer { Interval = 50 };
+                pollTimer.Tick += (_, _) =>
+                {
+                    ticks++;
+                    if (armedAt < 0)
+                    {
+                        return;
+                    }
+
+                    if (ticks - armedAt >= 10) // ~500ms after arming
+                    {
+                        pollTimer.Stop();
+                        second = new Form { Name = "second", Text = "Second" };
+                        second.Show();
+                    }
+                };
+                pollTimer.Start();
+
+                Application.Run();
+            }
+            catch (Exception exception)
+            {
+                uiReady.TrySetException(exception);
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        if (await Task.WhenAny(uiReady.Task, Task.Delay(TimeSpan.FromSeconds(5))) != uiReady.Task)
+        {
+            throw new TimeoutException("The fixture did not start within 5 seconds.");
+        }
+
+        var firstForm = await uiReady.Task;
+        await using var host = EndpointHost.Start(builder => builder.UseWinForms(firstForm));
+        await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
+
+        try
+        {
+            // Compile the condition, then close "first", both marshalled through it while it is
+            // still a valid owner - mirrors ConditionOperationTests.
+            // Wait_polls_until_a_condition_becomes_true's own "compile before timing anything"
+            // reasoning, though here it matters even more: only once this returns do we arm the
+            // "open second" countdown, so however long the cold compile actually took is
+            // irrelevant to whether the gap below is hit.
+            await client.EvaluateAsync(
+                new ExecutionRequest(condition, Marshal: ExecutionMarshalTargets.UiThread));
+            await client.EvaluateAsync(new ExecutionRequest(
+                "System.Windows.Forms.Application.OpenForms[0].Close(); true",
+                Marshal: ExecutionMarshalTargets.UiThread));
+            armedAt = ticks;
+
+            // No form is open at all right now - "first" just closed above, and "second" cannot
+            // appear for ~500ms of poll-timer ticks counted from this exact point - so the wait's
+            // very first poll is guaranteed to hit the zero-forms gap, not merely likely to.
+            var result = await client.RequestAsync(
+                "wait",
+                new ConditionRequest(
+                    condition,
+                    Expected: JsonDocument.Parse("true").RootElement,
+                    TimeoutMilliseconds: 15_000,
+                    PollIntervalMilliseconds: 50,
+                    Marshal: ExecutionMarshalTargets.UiThread));
+
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.True(result.Result!.Value.GetProperty("satisfied").GetBoolean());
+        }
+        finally
+        {
+            await client.EvaluateAsync(new ExecutionRequest(
+                "System.Windows.Forms.Application.ExitThread(); true",
+                Marshal: ExecutionMarshalTargets.UiThread));
             thread.Join(TimeSpan.FromSeconds(5));
         }
     }

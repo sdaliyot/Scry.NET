@@ -814,6 +814,26 @@ internal sealed class OperationDispatcher(
             comparison.Describe(outcome));
     }
 
+    /// <summary>
+    /// Error codes a <c>wait</c> poll iteration tolerates as "not yet satisfied, keep polling"
+    /// rather than letting escape and fail the operation outright - each represents the target
+    /// genuinely not being ready yet, which is a wait's whole reason to exist, not a caller error.
+    /// Deliberately narrow (not every exception): a real compilation error or a bug in the
+    /// condition's own source must still fail fast rather than masquerade as "not ready yet" until
+    /// the wait's timeout is exhausted.
+    /// <list type="bullet">
+    /// <item><c>execution_timed_out</c>: this single iteration's own execution deadline elapsed -
+    /// see <paramref name="remainingBudget"/> below.</item>
+    /// <item><c>dispatcher_owner_unavailable</c>: <c>WinFormsDispatcher</c>'s marshal owner is
+    /// between forms right now (its previous owner closed and no replacement is open yet) - the
+    /// same transient gap the owner-recovery fix in 4f17386 already tolerates for a direct
+    /// <c>InvokeAsync</c> call, extended here so a <c>wait</c> polling through it tolerates the gap
+    /// too instead of failing on the very first iteration that hits it.</item>
+    /// </list>
+    /// </summary>
+    private static readonly HashSet<string> TolerableWhilePolling =
+        new(StringComparer.Ordinal) { "execution_timed_out", "dispatcher_owner_unavailable" };
+
     /// <param name="remainingBudget">
     /// For <c>wait</c>'s polling loop: the caller's remaining wait budget. Only *raises* this single
     /// iteration's own execution timeout above evaluate's fixed default (30s) when the remaining
@@ -856,7 +876,7 @@ internal sealed class OperationDispatcher(
             return new ConditionOutcome(comparison.Matches(result.Value), result.Value);
         }
         catch (ScryOperationException exception) when (
-            remainingBudget is not null && exception.Code == "execution_timed_out")
+            remainingBudget is not null && TolerableWhilePolling.Contains(exception.Code))
         {
             // wait's whole purpose is tolerating a target that isn't ready yet - a single slow
             // iteration is exactly that, not a reason to fail the operation outright. The overall

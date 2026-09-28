@@ -1,4 +1,5 @@
 using System.Windows.Forms;
+using Scry.Runtime;
 
 namespace Scry.WinForms;
 
@@ -99,7 +100,12 @@ public sealed class WinFormsDispatcher
     /// <para>
     /// Only throws when no open form exists at all right now - a brief window-close/window-open
     /// gap - which stays a fast, distinguishable failure rather than a hang, but not a permanent
-    /// one: the next call tries again.
+    /// one: the next call tries again. Thrown as <see cref="ScryOperationException"/> with a
+    /// dedicated code (rather than a bare <see cref="InvalidOperationException"/>) specifically so
+    /// <c>OperationDispatcher</c>'s <c>wait</c> polling loop can classify and tolerate this exact
+    /// gap - the same way it already tolerates a per-iteration <c>execution_timed_out</c> - instead
+    /// of every exception type alike falling into the generic <c>operation_failed</c> bucket and
+    /// failing the whole wait on the very first iteration that hits the gap.
     /// </para>
     /// </summary>
     private Control ResolveOwner()
@@ -113,7 +119,8 @@ public sealed class WinFormsDispatcher
         var resolved = WinFormsOwnerSelection.SelectOwner(Application.OpenForms);
         if (resolved is null || resolved.IsDisposed || resolved.Disposing || !resolved.IsHandleCreated)
         {
-            throw new InvalidOperationException(
+            throw new ScryOperationException(
+                "dispatcher_owner_unavailable",
                 "The Windows Forms dispatcher owner handle is unavailable, and no open form is " +
                 "currently available to recover through. Retry once a form is open.");
         }

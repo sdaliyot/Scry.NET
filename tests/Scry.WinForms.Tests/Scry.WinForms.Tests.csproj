@@ -29,6 +29,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scry.WinForms\Scry.WinForms.csproj" />
+    <!--
+      For the wait/dispatcher-owner-recovery regression test: it needs the full EndpointHost +
+      ScryClient + generic "wait" operation dispatch stack (OperationDispatcher.EvaluateConditionAsync),
+      not WinFormsAdapter's own separate winforms.wait polling loop, which is a different mechanism
+      entirely and does not go through OperationDispatcher's execution_timed_out/
+      dispatcher_owner_unavailable tolerance at all.
+    -->
+    <ProjectReference Include="..\..\src\Scry.Client\Scry.Client.csproj" />
   </ItemGroup>
 
 </Project>

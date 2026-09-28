@@ -16,6 +16,14 @@
       duplicating that logic or exposing it as public API surface no other caller needs.
     -->
     <InternalsVisibleTo Include="Scry.Injector.Payload" />
+    <!--
+      WinFormsDispatcher.ResolveOwner throws ScryOperationException("dispatcher_owner_unavailable",
+      ...) for a transient "no open form right now" gap, so OperationDispatcher's wait loop can
+      classify and tolerate it (same as execution_timed_out) rather than it falling into the
+      generic operation_failed bucket every other exception type gets. Reusing this type rather
+      than inventing a Scry.WinForms-local one keeps exactly one error-code vocabulary.
+    -->
+    <InternalsVisibleTo Include="Scry.WinForms" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == '$(ScryNetFrameworkTarget)'">
