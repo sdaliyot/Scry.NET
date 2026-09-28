@@ -48,6 +48,79 @@ public sealed class WinFormsAdapterTests
         Assert.Contains("created handle", exception.Message);
     }
 
+    /// <summary>
+    /// Guards against a real regression: the marshal owner is captured once at injection time and
+    /// never otherwise re-evaluated, so an application whose first visible window is transient - a
+    /// login dialog that closes once the main window appears is the motivating case - used to wedge
+    /// permanently. Once the original owner's handle was destroyed, every future
+    /// <see cref="WinFormsDispatcher.InvokeAsync{T}"/> call threw against it forever, including the
+    /// very <c>winforms.wait</c> poll a caller would use to detect the transition, with no way to
+    /// recover from outside the target process. <see cref="WinFormsDispatcher"/> now re-resolves a
+    /// currently-valid owner from <c>Application.OpenForms</c> (via the same heuristic
+    /// <see cref="WinFormsOwnerSelection"/> uses at initial wiring) instead of throwing immediately.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_recovers_when_the_owner_form_closes_and_another_is_open()
+    {
+        var ready = new TaskCompletionSource<(WinFormsDispatcher Dispatcher, Form First, Form Second)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Application.Run() (parameterless), not Application.Run(firstForm) - the latter would tie
+        // the message loop's lifetime to the first form and exit the whole thread when it closes,
+        // which is exactly the transition this test needs to survive.
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var first = new Form { Name = "first", Text = "First" };
+                first.Show();
+                var second = new Form { Name = "second", Text = "Second" };
+                second.Show();
+
+                var dispatcher = new WinFormsDispatcher(first);
+                ready.SetResult((dispatcher, first, second));
+                Application.Run();
+            }
+            catch (Exception exception)
+            {
+                ready.TrySetException(exception);
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        if (await Task.WhenAny(ready.Task, Task.Delay(TimeSpan.FromSeconds(5))) != ready.Task)
+        {
+            throw new TimeoutException("The fixture did not start within 5 seconds.");
+        }
+
+        var (dispatcher, first, second) = await ready.Task;
+        try
+        {
+            // Close the original owner while a second form is still open and visible - the handle
+            // is destroyed synchronously as part of Close(), so the very next call must recover
+            // rather than throw against a form that no longer exists.
+            await dispatcher.InvokeAsync(() =>
+            {
+                first.Close();
+                return true;
+            });
+
+            var text = await dispatcher.InvokeAsync(() => second.Text);
+            Assert.Equal("Second", text);
+        }
+        finally
+        {
+            await dispatcher.InvokeAsync(() =>
+            {
+                Application.ExitThread();
+                return true;
+            });
+            thread.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Fact]
     public async Task Projection_is_bounded_and_reports_truncation()
     {

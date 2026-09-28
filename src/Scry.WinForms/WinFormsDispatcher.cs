@@ -4,7 +4,7 @@ namespace Scry.WinForms;
 
 public sealed class WinFormsDispatcher
 {
-    private readonly Control _owner;
+    private Control _owner;
 
     public WinFormsDispatcher(Control owner)
     {
@@ -41,17 +41,9 @@ public sealed class WinFormsDispatcher
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_owner.IsDisposed || _owner.Disposing)
-        {
-            throw new ObjectDisposedException(_owner.GetType().FullName);
-        }
-        if (!_owner.IsHandleCreated)
-        {
-            throw new InvalidOperationException(
-                "The Windows Forms dispatcher owner handle is unavailable.");
-        }
+        var owner = ResolveOwner();
 
-        if (!_owner.InvokeRequired)
+        if (!owner.InvokeRequired)
         {
             return Task.FromResult(callback());
         }
@@ -63,7 +55,7 @@ public sealed class WinFormsDispatcher
             completion);
         try
         {
-            _owner.BeginInvoke((MethodInvoker)(() =>
+            owner.BeginInvoke((MethodInvoker)(() =>
             {
                 try
                 {
@@ -89,5 +81,47 @@ public sealed class WinFormsDispatcher
         }
 
         return completion.Task;
+    }
+
+    /// <summary>
+    /// Returns a currently-usable marshal owner, re-resolving from <c>Application.OpenForms</c>
+    /// (via the same heuristic used at initial wiring - see <see cref="WinFormsOwnerSelection"/>)
+    /// and swapping <see cref="_owner"/> when the current one has become invalid.
+    /// <para>
+    /// The owner is captured once at injection time and never otherwise re-evaluated. Without
+    /// this, any app whose first visible window is transient - a login dialog that closes once
+    /// the main window appears is the motivating case - would wedge permanently: once the
+    /// original owner's handle is destroyed, every future call would keep throwing against it
+    /// forever, including the very <c>winforms.wait</c> poll a caller would use to detect the
+    /// transition, with no way to recover from outside the target process (the adapter is wired
+    /// once at injection and never re-wired).
+    /// </para>
+    /// <para>
+    /// Only throws when no open form exists at all right now - a brief window-close/window-open
+    /// gap - which stays a fast, distinguishable failure rather than a hang, but not a permanent
+    /// one: the next call tries again.
+    /// </para>
+    /// </summary>
+    private Control ResolveOwner()
+    {
+        var current = _owner;
+        if (!current.IsDisposed && !current.Disposing && current.IsHandleCreated)
+        {
+            return current;
+        }
+
+        var resolved = WinFormsOwnerSelection.SelectOwner(Application.OpenForms);
+        if (resolved is null || resolved.IsDisposed || resolved.Disposing || !resolved.IsHandleCreated)
+        {
+            throw new InvalidOperationException(
+                "The Windows Forms dispatcher owner handle is unavailable, and no open form is " +
+                "currently available to recover through. Retry once a form is open.");
+        }
+
+        // A benign race: a concurrent call may already have swapped in a different, equally
+        // valid resolution between the read above and this exchange. Either way, re-reading
+        // _owner after the attempt returns whichever resolution actually won.
+        Interlocked.CompareExchange(ref _owner, resolved, current);
+        return _owner;
     }
 }

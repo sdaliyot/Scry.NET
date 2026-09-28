@@ -82,29 +82,23 @@ internal static class DesktopAdapterWiring
 
     private static void ApplyWinForms(EndpointBuilder builder)
     {
-        // UseWinForms needs a Control to marshal through. Application.OpenForms is ordered by
-        // creation, not by which form is the application's "main" one - a hidden utility/listener
-        // form (observed in practice: a third-party UI library's own internal theme-change
-        // listener window, created before the application's real main form and left permanently
-        // invisible) can end up first and silently become the marshal owner. Every UI-marshalled
-        // call then targets that hidden form's handle instead of a form anyone is actually
-        // driving, and since nothing ever shows, activates, or otherwise pumps it any differently
-        // from before, calls marshalled through it can hang rather than fail fast. Prefer the
-        // first *visible* open form; only fall back to the first form of any visibility when none
-        // are visible yet (e.g. attaching before the main form has shown), which keeps the
-        // original behavior for that edge case.
+        // UseWinForms needs a Control to marshal through. The actual selection heuristic ("prefer
+        // the first visible open form, else the first form of any visibility") lives in
+        // Scry.WinForms.WinFormsOwnerSelection - shared with WinFormsDispatcher's own owner-
+        // recovery logic rather than duplicated here, reached via reflection like everything else
+        // this payload calls into the adapter assembly for (this assembly cannot reference
+        // System.Windows.Forms directly - see the class remarks above).
         var applicationType = RequireLoadedType("System.Windows.Forms", "System.Windows.Forms.Application");
         var openForms = applicationType
             .GetProperty("OpenForms", BindingFlags.Public | BindingFlags.Static)
             ?.GetValue(null);
-        var forms = (openForms as System.Collections.IEnumerable)?.Cast<object>().ToArray()
-            ?? Array.Empty<object>();
         var controlType = RequireLoadedType("System.Windows.Forms", "System.Windows.Forms.Control");
-        var visibleProperty = controlType.GetProperty("Visible", BindingFlags.Public | BindingFlags.Instance)
+        var adapter = LoadAdapterAssembly("Scry.WinForms");
+        var selectionType = adapter.GetType("Scry.WinForms.WinFormsOwnerSelection", throwOnError: true)!;
+        var selectOwner = selectionType.GetMethod("SelectOwner", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException(
-                "System.Windows.Forms.Control.Visible was not found by reflection.");
-        var owner = forms.FirstOrDefault(form => (bool)visibleProperty.GetValue(form)!)
-            ?? forms.FirstOrDefault();
+                "Scry.WinForms.WinFormsOwnerSelection.SelectOwner was not found by reflection.");
+        var owner = openForms is null ? null : selectOwner.Invoke(null, new[] { openForms });
         if (owner is null)
         {
             throw new InvalidOperationException(
@@ -114,7 +108,7 @@ internal static class DesktopAdapterWiring
         }
 
         InvokeRegistration(
-            "Scry.WinForms",
+            adapter,
             "Scry.WinForms.WinFormsEndpointBuilderExtensions",
             "UseWinForms",
             controlType,
@@ -150,9 +144,28 @@ internal static class DesktopAdapterWiring
         string methodName,
         Type ownerParameterType,
         EndpointBuilder builder,
+        object owner) =>
+        InvokeRegistration(
+            LoadAdapterAssembly(adapterAssemblyName),
+            extensionsTypeName,
+            methodName,
+            ownerParameterType,
+            builder,
+            owner);
+
+    /// <summary>
+    /// Overload for a caller that already loaded the adapter assembly for its own reasons
+    /// (<see cref="ApplyWinForms"/> loads it first to reach <c>WinFormsOwnerSelection</c>) - avoids
+    /// loading the same assembly into the load context twice.
+    /// </summary>
+    private static void InvokeRegistration(
+        Assembly adapter,
+        string extensionsTypeName,
+        string methodName,
+        Type ownerParameterType,
+        EndpointBuilder builder,
         object owner)
     {
-        var adapter = LoadAdapterAssembly(adapterAssemblyName);
         var extensions = adapter.GetType(extensionsTypeName, throwOnError: true)!;
 
         // UseWpf and UseWinForms each take (builder, owner, configure = null, options = null), and
