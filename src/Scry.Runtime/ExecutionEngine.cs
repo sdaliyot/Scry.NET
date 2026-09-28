@@ -117,6 +117,24 @@ internal sealed class ExecutionEngine
         _scripts = new(options.MaximumCachedScripts);
     }
 
+    /// <summary>
+    /// Exposed so a caller building its own per-call <see cref="ExecutionRequest.TimeoutMilliseconds"/>
+    /// (<c>OperationDispatcher</c>'s <c>wait</c> polling loop, bounding each iteration to its
+    /// remaining budget) can clamp into the same range <see cref="Validate"/> enforces, rather than
+    /// discovering the limit via a thrown <c>invalid_request</c>.
+    /// </summary>
+    internal int MaximumExecutionMilliseconds => _options.MaximumExecutionMilliseconds;
+
+    /// <summary>
+    /// Exposed so <c>wait</c>'s polling loop only *raises* a poll iteration's own timeout above this
+    /// default (when its own remaining budget is bigger), rather than ever lowering it below this -
+    /// a wait with a very small or zero overall timeout is a deliberate "check once, whatever it
+    /// costs" idiom used throughout this codebase's own tests, and clamping an iteration's timeout
+    /// down to match a tiny wait budget would cripple even an ordinary compile+run that this default
+    /// already comfortably covers.
+    /// </summary>
+    internal int DefaultExecutionMilliseconds => _options.DefaultExecutionMilliseconds;
+
     public async ValueTask<ExecutionOutput> EvaluateAsync(
         ExecutionRequest request,
         SessionState session,

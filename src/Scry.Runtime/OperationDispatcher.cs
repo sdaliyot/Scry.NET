@@ -748,7 +748,8 @@ internal sealed class OperationDispatcher(
         while (true)
         {
             attempts++;
-            outcome = await EvaluateConditionAsync(request, comparison, session, cancellationToken)
+            outcome = await EvaluateConditionAsync(
+                    request, comparison, session, timeout - stopwatch.Elapsed, cancellationToken)
                 .ConfigureAwait(false);
             if (outcome.Satisfied || stopwatch.Elapsed >= timeout)
             {
@@ -789,7 +790,8 @@ internal sealed class OperationDispatcher(
         var request = Deserialize<ConditionRequest>(payload);
         var comparison = ConditionComparison.Parse(request);
         var stopwatch = Stopwatch.StartNew();
-        var outcome = await EvaluateConditionAsync(request, comparison, session, cancellationToken)
+        var outcome = await EvaluateConditionAsync(
+                request, comparison, session, remainingBudget: null, cancellationToken)
             .ConfigureAwait(false);
         stopwatch.Stop();
         if (!outcome.Satisfied)
@@ -812,23 +814,56 @@ internal sealed class OperationDispatcher(
             comparison.Describe(outcome));
     }
 
+    /// <param name="remainingBudget">
+    /// For <c>wait</c>'s polling loop: the caller's remaining wait budget. Only *raises* this single
+    /// iteration's own execution timeout above evaluate's fixed default (30s) when the remaining
+    /// budget is bigger than that default - never lowers it. Without the raise, a poll iteration
+    /// whose marshalled evaluate takes longer than that default - a busy UI thread still doing
+    /// startup work is a real case - throws <c>execution_timed_out</c> and fails the entire wait far
+    /// short of a caller's actual requested timeout (e.g. 120s), with no way to avoid it. Never
+    /// lowering it matters just as much: a wait with a very small or zero overall timeout is a
+    /// deliberate "check once, whatever it costs" idiom used throughout this codebase's own tests,
+    /// and clamping the iteration down to match that tiny budget would cripple even an ordinary
+    /// compile+run that the default already comfortably covers. Raised values are clamped into
+    /// <see cref="ExecutionEngine.MaximumExecutionMilliseconds"/>'s allowed range, since a wait's own
+    /// timeout has no such ceiling. Null for <c>assert</c>, which has no polling budget to compare
+    /// against and keeps evaluate's own default/explicit timeout unconditionally.
+    /// </param>
     private async ValueTask<ConditionOutcome> EvaluateConditionAsync(
         ConditionRequest request,
         ConditionComparison comparison,
         SessionState session,
+        TimeSpan? remainingBudget,
         CancellationToken cancellationToken)
     {
         // Reuses evaluate wholesale, including its marshal handling, so a condition can read
         // UI-owned state with "marshal": "ui" without wait's polling loop ever running there.
+        int? iterationTimeoutMilliseconds =
+            remainingBudget is { } budget && budget.TotalMilliseconds > execution.DefaultExecutionMilliseconds
+                ? Math.Min((int)budget.TotalMilliseconds, execution.MaximumExecutionMilliseconds)
+                : null;
         var evaluation = new ExecutionRequest(
             request.Source,
             request.Imports,
             request.References,
-            Marshal: request.Marshal);
-        var result = await execution
-            .EvaluateAsync(evaluation, session, cancellationToken)
-            .ConfigureAwait(false);
-        return new ConditionOutcome(comparison.Matches(result.Value), result.Value);
+            iterationTimeoutMilliseconds,
+            request.Marshal);
+        try
+        {
+            var result = await execution
+                .EvaluateAsync(evaluation, session, cancellationToken)
+                .ConfigureAwait(false);
+            return new ConditionOutcome(comparison.Matches(result.Value), result.Value);
+        }
+        catch (ScryOperationException exception) when (
+            remainingBudget is not null && exception.Code == "execution_timed_out")
+        {
+            // wait's whole purpose is tolerating a target that isn't ready yet - a single slow
+            // iteration is exactly that, not a reason to fail the operation outright. The overall
+            // stopwatch already accounts for the time this iteration actually took, so the next
+            // loop check (or this being the last iteration) is what ends things, not this catch.
+            return new ConditionOutcome(false, null);
+        }
     }
 
     private readonly record struct ConditionOutcome(bool Satisfied, object? Value);

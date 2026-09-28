@@ -214,6 +214,45 @@ public sealed class ConditionOperationTests
         Assert.Contains("assert", operations);
     }
 
+    /// <summary>
+    /// Guards against a real regression: each poll iteration's own evaluate used to run with no
+    /// <c>timeoutMilliseconds</c> of its own, falling back to <c>evaluate</c>'s fixed default (30s)
+    /// - completely decoupled from the wait's own <c>timeoutMilliseconds</c>, which only bounds the
+    /// number of attempts/overall elapsed time, not any individual attempt. A poll iteration slower
+    /// than that fixed default - a busy UI thread still doing startup work is a real case - threw
+    /// <c>execution_timed_out</c> straight out of the wait's polling loop, failing the whole
+    /// operation far short of the caller's actual requested budget, with no way to avoid it.
+    /// <para>
+    /// Uses an artificially small <see cref="EndpointOptions.DefaultExecutionMilliseconds"/> (200ms,
+    /// rather than the real 30s default) purely so the reproduction doesn't need an actual 30-second
+    /// sleep - the code path exercised is identical either way, since the bug is that each
+    /// iteration's <c>ExecutionRequest.TimeoutMilliseconds</c> was left unset rather than bound to
+    /// the wait's own remaining budget, regardless of what the fallback default happens to be.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Wait_survives_a_poll_iteration_slower_than_the_default_execution_timeout()
+    {
+        await using var host = EndpointHost.Start(
+            builder => builder.RegisterValue("counter", 7),
+            new EndpointOptions { DefaultExecutionMilliseconds = 200 });
+        await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
+
+        // Slower than the 200ms default above, but well inside the wait's own 3000ms budget -
+        // exactly the "single slow iteration" case that must not fail the whole wait.
+        var result = await client.RequestAsync(
+            "wait",
+            new ConditionRequest(
+                "await Task.Delay(500, Context.CancellationToken); true",
+                TimeoutMilliseconds: 5000,
+                PollIntervalMilliseconds: 50));
+
+        Assert.True(result.Success, result.Error?.Message);
+        var payload = result.Result!.Value;
+        Assert.True(payload.GetProperty("satisfied").GetBoolean());
+        Assert.Equal(1, payload.GetProperty("attempts").GetInt32());
+    }
+
     private static JsonElement JsonNumber(int value) =>
         JsonDocument.Parse(value.ToString(System.Globalization.CultureInfo.InvariantCulture)).RootElement;
 
