@@ -62,7 +62,7 @@ changed this time"; the existing install (if any) is always what gets returned.
 >     foreach ($scope in 'Process', 'User', 'Machine') {
 >         $dir = [Environment]::GetEnvironmentVariable($envVar, $scope)
 >         if (![string]::IsNullOrWhiteSpace($dir)) {
->             Write-Host "Checking $scope environment variable $envVar: $dir"
+>             Write-Host ("Checking {0} environment variable {1}: {2}" -f $scope, $envVar, $dir)
 >             $exePath = Resolve-ScryExe $dir
 >             if ($exePath) { break }
 >         }
