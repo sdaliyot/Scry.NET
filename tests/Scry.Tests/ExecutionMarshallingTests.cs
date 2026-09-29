@@ -87,12 +87,19 @@ public sealed class ExecutionMarshallingTests
         await using var client = await ScryClient.ConnectAsync(host.DescriptorPath);
 
         // a statement body, so this throws at run time on the marshalled thread rather than
-        // failing to compile as an expression
+        // failing to compile as an expression. A generous explicit timeoutMilliseconds here: the
+        // engine starts its cooperative timeout before compiling (see ExecutionEngine.RunAsync),
+        // so on a CPU-starved CI runner a cold Roslyn compile plus SingleThreadExecutor's dedicated
+        // thread waiting for scheduling can together eat well past the 30-second default even
+        // though the throw itself is instant - which misclassifies this as execution_timed_out
+        // instead of the operation_failed this test actually exercises. Observed happening for real
+        // in CI (net462 x86 leg) after the executor thread never got CPU time within 30s.
         var failed = await client.RequestAsync(
             "execute",
             new ExecutionRequest(
                 "throw new System.InvalidOperationException(\"boom\");",
-                Marshal: ExecutionMarshalTargets.UiThread));
+                Marshal: ExecutionMarshalTargets.UiThread,
+                TimeoutMilliseconds: 90_000));
 
         Assert.False(failed.Success);
         Assert.Equal("operation_failed", failed.Error?.Code);
