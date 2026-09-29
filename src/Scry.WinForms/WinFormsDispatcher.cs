@@ -98,6 +98,20 @@ public sealed class WinFormsDispatcher
     /// once at injection and never re-wired).
     /// </para>
     /// <para>
+    /// Validity is checked via <see cref="WinFormsOwnerSelection.IsAlive"/> - Win32's own
+    /// <c>IsWindow</c>, not just .NET's <see cref="Control.IsDisposed"/>/
+    /// <see cref="Control.IsHandleCreated"/> bookkeeping. That bookkeeping only updates via message
+    /// processing on the thread that created the control, so it keeps reporting a control as live
+    /// long after the thread that owned it exits and the OS tears the window down - confirmed
+    /// against a real process stuck exactly this way, where a hidden third-party helper window
+    /// became the recovered owner (see <see cref="WinFormsOwnerSelection"/>'s own remarks) and then
+    /// stayed "valid" by those two flags forever, even though its native window no longer existed
+    /// and nothing posted to it was ever going to be delivered. Re-checking liveness here, not only
+    /// at the moment of selection, means a cached owner that dies later - not just one that was
+    /// already dead when picked - also gets re-resolved on the very next call instead of wedging
+    /// permanently.
+    /// </para>
+    /// <para>
     /// Only throws when no open form exists at all right now - a brief window-close/window-open
     /// gap - which stays a fast, distinguishable failure rather than a hang, but not a permanent
     /// one: the next call tries again. Thrown as <see cref="ScryOperationException"/> with a
@@ -111,13 +125,13 @@ public sealed class WinFormsDispatcher
     private Control ResolveOwner()
     {
         var current = _owner;
-        if (!current.IsDisposed && !current.Disposing && current.IsHandleCreated)
+        if (WinFormsOwnerSelection.IsAlive(current))
         {
             return current;
         }
 
         var resolved = WinFormsOwnerSelection.SelectOwner(Application.OpenForms);
-        if (resolved is null || resolved.IsDisposed || resolved.Disposing || !resolved.IsHandleCreated)
+        if (resolved is null || !WinFormsOwnerSelection.IsAlive(resolved))
         {
             throw new ScryOperationException(
                 "dispatcher_owner_unavailable",

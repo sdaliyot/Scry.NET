@@ -124,6 +124,86 @@ public sealed class WinFormsAdapterTests
     }
 
     /// <summary>
+    /// Reported regression: a single post-recovery call succeeding (as the test above verifies) is
+    /// not sufficient - a real Control Center session reportedly stays permanently broken after its
+    /// first recovery, with every subsequent call (even much later, even a no-op evaluate) failing
+    /// with execution_timed_out, as if the recovered owner or its BeginInvoke plumbing silently stops
+    /// completing after exactly one successful post-recovery call. This drives many InvokeAsync calls
+    /// through the recovered owner, each separated by a real delay (letting the message pump idle
+    /// between calls, not just DoEvents within a single call), to see whether it degrades after the
+    /// first one.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_keeps_working_across_many_calls_after_recovery()
+    {
+        var ready = new TaskCompletionSource<(WinFormsDispatcher Dispatcher, Form First, Form Second)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var first = new Form { Name = "first", Text = "First" };
+                first.Show();
+                var second = new Form { Name = "second", Text = "Second" };
+                second.Show();
+
+                var dispatcher = new WinFormsDispatcher(first);
+                ready.SetResult((dispatcher, first, second));
+                Application.Run();
+            }
+            catch (Exception exception)
+            {
+                ready.TrySetException(exception);
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        if (await Task.WhenAny(ready.Task, Task.Delay(TimeSpan.FromSeconds(5))) != ready.Task)
+        {
+            throw new TimeoutException("The fixture did not start within 5 seconds.");
+        }
+
+        var (dispatcher, first, second) = await ready.Task;
+        try
+        {
+            await dispatcher.InvokeAsync(() =>
+            {
+                first.Close();
+                return true;
+            });
+
+            // The first post-recovery call, as covered by the test above.
+            Assert.Equal("Second", await dispatcher.InvokeAsync(() => second.Text));
+
+            // Many further calls, each after a real delay so the UI thread's message pump goes idle
+            // between them - not just one immediate follow-up call.
+            for (var i = 0; i < 20; i++)
+            {
+                await Task.Delay(50);
+                var callTask = dispatcher.InvokeAsync(() => second.Text);
+                var completed = await Task.WhenAny(callTask, Task.Delay(TimeSpan.FromSeconds(5)));
+                Assert.True(
+                    completed == callTask,
+                    $"InvokeAsync call #{i} after recovery did not complete within 5 seconds - " +
+                    "the recovered owner appears to have stopped marshaling calls.");
+                Assert.Equal("Second", await callTask);
+            }
+        }
+        finally
+        {
+            await dispatcher.InvokeAsync(() =>
+            {
+                Application.ExitThread();
+                return true;
+            });
+            thread.Join(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    /// <summary>
     /// Guards against a real regression, distinct from the one above: closing the owner form when
     /// *no other form is open yet* makes <c>WinFormsDispatcher.ResolveOwner</c> throw (there is
     /// nothing to recover through in that instant), and that throw used to be a bare
@@ -247,6 +327,65 @@ public sealed class WinFormsAdapterTests
                 Marshal: ExecutionMarshalTargets.UiThread));
             thread.Join(TimeSpan.FromSeconds(5));
         }
+    }
+
+    /// <summary>
+    /// Guards against a real regression found live in a Control Center process stuck permanently
+    /// broken: <c>Application.OpenForms</c> can contain a form whose native window Win32 itself has
+    /// already destroyed - here, a Syncfusion <c>XPThemes.ThemeChangeListenerForm</c>, a hidden
+    /// helper window created once at process startup, well before the real main form - while .NET's
+    /// own <see cref="Control.IsHandleCreated"/>/<see cref="Control.IsDisposed"/> bookkeeping still
+    /// reports it as live, because that bookkeeping only updates via message processing on the
+    /// thread that created the window, and that thread had already exited without ever running one.
+    /// <para>
+    /// Reproduced here by creating a decoy <see cref="Form"/> on a throwaway thread that creates its
+    /// handle (which registers it in <c>Application.OpenForms</c> - a <see cref="Form"/> does this
+    /// itself on handle creation, whether or not <c>Show()</c> is ever called) and then simply ends
+    /// without ever pumping messages for it - the OS destroys a thread's windows when it exits, but
+    /// nothing ever tells the <see cref="Form"/> object, so it keeps reporting itself as created and
+    /// not disposed forever after.
+    /// </para>
+    /// <para>
+    /// Before the fix, <c>WinFormsOwnerSelection.SelectOwner</c> trusted exactly those two flags:
+    /// if the real main form had not yet turned <see cref="Control.Visible"/> at the moment
+    /// selection ran (the exact race that hit this in Control Center - a login dialog closing before
+    /// its replacement appears), "prefer first visible" found nothing and fell back to "first of any
+    /// visibility" by creation order - the already-dead decoy, since it was created first. Once
+    /// picked, nothing ever re-validated it, so the marshal owner was stuck on a window that could
+    /// never again receive a posted message.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void SelectOwner_skips_a_form_whose_native_window_is_already_destroyed()
+    {
+        Form? decoy = null;
+        var decoyThread = new Thread(() =>
+        {
+            decoy = new Form { Name = "decoy" };
+            _ = decoy.Handle; // Registers it in Application.OpenForms without ever showing it.
+        });
+        decoyThread.SetApartmentState(ApartmentState.STA);
+        decoyThread.Start();
+        decoyThread.Join(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(decoy);
+        // The decoy's owning thread has now exited without ever running a message loop for it, so
+        // the OS has already torn its window down - but .NET's own bookkeeping doesn't know that.
+        Assert.True(decoy!.IsHandleCreated);
+        Assert.False(decoy.IsDisposed);
+        Assert.False(WinFormsOwnerSelection.IsAlive(decoy));
+
+        using var main = new Form { Name = "main" };
+        _ = main.Handle; // Alive, but - matching the real race - not yet Visible either.
+        Assert.True(WinFormsOwnerSelection.IsAlive(main));
+
+        // Neither is visible, so this only exercises the "first of any visibility" fallback - the
+        // one the real bug fell through to. "decoy" is first by creation order; the fix must still
+        // skip it as dead and land on "main" rather than the fallback's naive first-of-any-visibility
+        // pick.
+        var selected = WinFormsOwnerSelection.SelectOwner(new[] { decoy, main });
+
+        Assert.Same(main, selected);
     }
 
     [Fact]
