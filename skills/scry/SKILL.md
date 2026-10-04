@@ -908,9 +908,9 @@ Check `capabilities`: `method-hooks` must be in `features`. Find the declaring t
 
 ```json
 {
-  "type": "Adaptor.SyncOrchestrator",
-  "method": "PushGroupsAndAwaitTerminal",
-  "parameterTypes": ["Group[]"]
+  "type": "Shop.CheckoutService",
+  "method": "PlaceOrder",
+  "parameterTypes": ["Order"]
 }
 ```
 
@@ -934,7 +934,7 @@ Persist the returned `result.hook` handle. It carries the session, so later comm
 ```json
 {
   "hook": { "targetId": "01J...", "sessionId": "01J...", "hookId": "01J..." },
-  "predicate": "((Group[])Args[0]).Any(g => g.ID == \"9\") && (bool)ReturnValue",
+  "predicate": "((Shop.Order)Args[0]).Lines.Any(line => line.Sku == \"SKU-100\") && (bool)ReturnValue",
   "timeoutMilliseconds": 60000
 }
 ```

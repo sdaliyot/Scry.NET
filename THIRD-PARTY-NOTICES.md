@@ -17,11 +17,16 @@ under its own copyright holder, so its notice is reproduced separately below the
 
 **Lib.Harmony.** Copyright (c) 2017 Andreas Pardeike, MIT License (the text is the one at the end
 of this file, with that copyright line). The `Lib.Harmony` package ships Harmony with its
-dependencies merged into the single `0Harmony.dll`, including `MonoMod.Core` by 0x0ade and
-nike4613 (credited in the package's README). That merged code is MIT-licensed upstream at
-[github.com/MonoMod/MonoMod](https://github.com/MonoMod/MonoMod); the `Lib.Harmony` package does not
-itself include MonoMod's license text, so consult that repository for it. Scry.NET stages the merged
-package rather than `Lib.Harmony.Thin` on purpose - same code, but a chain of separate DLLs.
+dependencies merged into the single `0Harmony.dll`, including `MonoMod.Core` (credited in the
+package's README to 0x0ade and nike4613).
+
+**MonoMod** (merged into `0Harmony.dll`). Copyright (c) 2015 - 2020 0x0ade, MIT License, as stated in
+the `LICENSE` file of [github.com/MonoMod/MonoMod](https://github.com/MonoMod/MonoMod); the text is
+the one at the end of this file, with that copyright line. The `Lib.Harmony` package does not itself
+include this notice, so it is reproduced here.
+
+Scry.NET stages the merged package rather than `Lib.Harmony.Thin` on purpose - same code, but a chain
+of separate DLLs.
 
 **What this list does not attempt to enumerate.** `Microsoft.CodeAnalysis.CSharp.Scripting` pulls
 in further Microsoft/.NET Foundation packages of its own (the rest of the Roslyn compiler platform,
@@ -40,7 +45,8 @@ the two ever disagree.
 ## MIT License
 
 The license below applies to every package listed above; for `Lib.Harmony` the copyright line is
-"Copyright (c) 2017 Andreas Pardeike", as stated above.
+"Copyright (c) 2017 Andreas Pardeike", and for the MonoMod code merged into it "Copyright (c) 2015 -
+2020 0x0ade", as stated above.
 
 ```
 MIT License

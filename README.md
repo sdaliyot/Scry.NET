@@ -505,16 +505,16 @@ which is loaded into the endpoint's own AppDomain the first time a hook is added
 
 ```csharp
 await using var hook = await client.AddHookAsync(new HookAddRequest(
-    Type: "Adaptor.SyncOrchestrator",
-    Method: "PushGroupsAndAwaitTerminal"));   // ParameterTypes: new[] { "Group[]" } picks an overload
+    Type: "Shop.CheckoutService",
+    Method: "PlaceOrder"));   // ParameterTypes: new[] { "Order" } picks an overload
 
-// ... trigger the change elsewhere ...
+// ... trigger the checkout elsewhere ...
 
 // The predicate is C#, evaluated in the target against the real captured objects.
 var call = await hook.WaitForCallAsync(
-    "((Group[])Args[0]).Any(g => g.ID == \"9\")",
+    "((Shop.Order)Args[0]).Lines.Any(line => line.Sku == \"SKU-100\")",
     timeout: TimeSpan.FromSeconds(60));
-bool succeeded = call.GetReturnValue<bool>();
+bool succeeded = call.GetReturnValue<bool>();   // what the private PlaceOrder returned
 // leaving the scope disposes the hook, which restores the original method
 ```
 
