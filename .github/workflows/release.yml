@@ -171,7 +171,7 @@ jobs:
               Copy-Item "src\Scry.Contracts\bin\Release\net8.0\Scry.Contracts.dll", "src\Scry.Client\bin\Release\net8.0\Scry.Client.dll", "src\Scry.Injector\bin\Release\net8.0\scry-injector.dll" -Destination "$dir\lib\net"
               Copy-Item "src\Scry.Contracts\bin\Release\net462\Scry.Contracts.dll", "src\Scry.Client\bin\Release\net462\Scry.Client.dll", "src\Scry.Injector\bin\Release\net462\scry-injector.dll" -Destination "$dir\lib\netfx"
 
-              Copy-Item README.md, LICENSE -Destination $dir
+              Copy-Item README.md, LICENSE, THIRD-PARTY-NOTICES.md -Destination $dir
               Copy-Item skills\scry\SKILL.md -Destination $dir
 
               # README.md links the logo as "assets/Scry.NET-logo.png" - keep that path valid here too.
