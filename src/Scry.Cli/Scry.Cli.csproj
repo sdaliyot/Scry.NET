@@ -23,7 +23,24 @@
     <PackageId>Scry.Cli</PackageId>
   </PropertyGroup>
 
-  <Target Name="StageInjectorComponents" AfterTargets="Build">
+  <!--
+    StageInjectorComponents below copies what Scry.Injector's own AfterTargets="Build" target
+    (BuildInjectionPayloads) places in the injector's output. Referencing the injector does not
+    guarantee that target has finished: when the solution build has already started the injector,
+    the reference request is satisfied as soon as the injector's Build target completes - before
+    that after-build target - so the copy below could find no native helper and an incomplete
+    payload, and a build that reported success produced a CLI that fails every attach with
+    missing_native_helper. Requesting both targets explicitly makes this wait for (or run) the
+    staging, whichever got there first. Reproduced by delaying BuildInjectionPayloads while the
+    CLI's reference request arrives mid-way; it showed up in CI as ten failing attach tests.
+  -->
+  <Target Name="BuildInjectorComponents">
+    <MSBuild Projects="../Scry.Injector/Scry.Injector.csproj"
+             Targets="Build;BuildInjectionPayloads"
+             Properties="TargetFramework=$(ScryModernTargetFramework)" />
+  </Target>
+
+  <Target Name="StageInjectorComponents" AfterTargets="Build" DependsOnTargets="BuildInjectorComponents">
     <ItemGroup>
       <InjectorPayload Include="..\Scry.Injector\bin\$(Configuration)\$(ScryModernTargetFramework)\payload\**\*" />
       <InjectorNative Include="..\Scry.Injector\bin\$(Configuration)\$(ScryModernTargetFramework)\native\**\*" />
