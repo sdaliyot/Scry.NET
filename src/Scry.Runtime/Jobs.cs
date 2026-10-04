@@ -72,11 +72,12 @@ internal sealed class JobManager : IDisposable
     {
         if (string.IsNullOrWhiteSpace(request.Operation) ||
             request.Operation is "handshake" ||
-            request.Operation.StartsWith("job.", StringComparison.Ordinal))
+            request.Operation.StartsWith("job.", StringComparison.Ordinal) ||
+            request.Operation.StartsWith("hook.", StringComparison.Ordinal))
         {
             throw new ScryOperationException(
                 "invalid_request",
-                "A job operation must name a non-job protocol operation.");
+                "A job operation must name a protocol operation that is not itself a job or hook operation.");
         }
 
         if (request.Payload.ValueKind != JsonValueKind.Object)

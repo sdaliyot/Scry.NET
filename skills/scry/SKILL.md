@@ -191,7 +191,9 @@ When attaching to an existing process using `scry attach`:
 5. Run `scry capabilities` and `scry roots`.
 6. Prefer `inspect`, `get`, `set`, `invoke`, and `enumerate`.
 7. Use `wpf.*` or `winforms.*` projection operations for UI traversal and synchronization.
-8. Use `evaluate` or `execute` only when the structured operations cannot do the job.
+8. Use `evaluate` or `execute` only when the structured operations cannot do the job. To observe a
+   method *call* (arguments, return value, exception) rather than state, use `hooks` - see
+   "Observing a method call".
 9. Validate mutations with a fresh read, wait, or assertion.
 10. Release leased handles when a persistent session is used.
 
@@ -893,6 +895,83 @@ Advance to `nextCursor`. If `truncated` is true, logs before `oldestCursor` are 
 `job.wait` returning `timedOut:true` is not a failed job and does not change its state.
 Cancellation is cooperative. Terminal states are `succeeded`, `failed`, and `canceled`.
 
+## Observing a method call (hooks)
+
+`evaluate`, `get` and `wait` see state, not calls. When the question is "did this method run, what
+was it given, what did it return, did it throw" - especially for a private, non-virtual method that
+leaves no trace - hook it. A hook records calls without changing the method's behavior.
+
+Check `capabilities`: `method-hooks` must be in `features`. Find the declaring type first
+(`find-types`, `describe-type` with `includeNonPublic`), because `type` must be the exact full name.
+
+`hook-add.json`:
+
+```json
+{
+  "type": "Adaptor.SyncOrchestrator",
+  "method": "PushGroupsAndAwaitTerminal",
+  "parameterTypes": ["Group[]"]
+}
+```
+
+```powershell
+scry hooks add --target app --request hook-add.json
+```
+
+Read the result before relying on the hook:
+
+- `warnings` - `inlining_risk_high` means a caller that inlined the method bypasses the hook, so a
+  hook that never fires proves nothing; `foreign_harmony_loaded` and `method_patched_by_others`
+  explain interference. `inlining.risk` of `none` means the method cannot be inlined.
+- `created: false` means this session already hooked the method; the existing hook is returned.
+- Failures are specific: `type_not_found`, `member_not_found`, `ambiguous_member` (pass
+  `parameterTypes`; the message lists the overloads), `method_not_patchable`, `hooks_unavailable`,
+  `method_patched_by_foreign_harmony`.
+
+Persist the returned `result.hook` handle. It carries the session, so later commands resume it.
+`hook-wait.json`:
+
+```json
+{
+  "hook": { "targetId": "01J...", "sessionId": "01J...", "hookId": "01J..." },
+  "predicate": "((Group[])Args[0]).Any(g => g.ID == \"9\") && (bool)ReturnValue",
+  "timeoutMilliseconds": 60000
+}
+```
+
+```powershell
+scry hooks wait --target app --request hook-wait.json
+```
+
+The predicate is C# evaluated in the target against the real captured objects, with `Args`
+(`object[]`), `ReturnValue`, `Exception`, `Instance` and `Call` in scope, and must produce a `bool`.
+Omit it to take the first call. It runs in this request, never inside the patched method.
+
+- `satisfied: true` - `call` has `arguments`, `returnValue` (a scalar or value type carries its
+  `value`), `exception`, `outcome` (`returned` or `threw`), `threadId` and `sequence`.
+- `timedOut: true` is a normal response, not an error. Read `diagnostics`: with no call ever
+  recorded it says so and repeats the inlining risk. `evaluated`, `totalCalls` and `droppedCalls` tell
+  you whether calls were seen and missed.
+- To continue past a call, pass its `nextCursor` as `cursor` so the next wait sees only newer calls.
+- A reference-type argument is reported by type (`kind: "preview"`). Use the predicate to test its
+  contents, or set `"includeReferences": true` to get a handle you can `inspect`.
+
+`scry hooks read` pages recorded calls by `cursor`/`limit` (`truncated` means older calls were
+dropped; raise `capacity` on add); `scry hooks drain` reads then discards; `scry hooks list --session
+<id>` shows a session's hooks. A hook does not survive its session, so use `--session`/the handle
+rather than an ephemeral connection.
+
+**Always remove the hook when done** - it patches the live process:
+
+```powershell
+scry hooks remove --target app --request hook-remove.json
+```
+
+A hook on a type in a non-default AppDomain (.NET Framework) must be added through a sibling endpoint
+started for that AppDomain with `appdomain.start`; the default-domain endpoint answers
+`type_not_found`. Do not hook a method on a hot path casually: each call pays for the capture, and a
+buffered call keeps its arguments alive.
+
 ## Multi-target scenario and batch
 
 Use a scenario for an explicit multi-process flow. Each command must select exactly one
@@ -1065,7 +1144,9 @@ fresh read/status query to establish the current state.
 - Never copy descriptors or capability tokens to logs, chat, telemetry, source control, or
   remote systems.
 - Never expose or bridge the named-pipe protocol over a network.
-- Treat non-public inspection and C# execution as privileged debugging actions.
+- Treat non-public inspection, C# execution and method hooks as privileged debugging actions. A hook
+  patches the live process and keeps captured arguments (which may be secrets) in memory until read,
+  drained or removed: hook only methods you need, keep `capacity` small, and always `hooks remove`.
 - Prefer public structured operations and the least mutation necessary.
 - Do not execute downloaded, unreviewed, or user-secret-bearing source.
 - Do not claim a projection is complete when it is bounded or truncated.

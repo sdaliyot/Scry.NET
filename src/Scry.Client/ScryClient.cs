@@ -57,6 +57,9 @@ public sealed class ScryClient : IAsyncDisposable
     /// </summary>
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>Headroom added to a server-side wait so the client deadline does not race it.</summary>
+    private static readonly TimeSpan WaitDeadlineMargin = TimeSpan.FromSeconds(15);
+
     public string SessionId => Handshake.SessionId;
 
     public static async Task<ScryClient> ConnectAsync(
@@ -309,14 +312,14 @@ public sealed class ScryClient : IAsyncDisposable
         string operation,
         object? payload = null,
         CancellationToken cancellationToken = default) =>
-        RequestCoreAsync(operation, payload, cancellationToken, null);
+        RequestCoreAsync(operation, payload, cancellationToken, null, null);
 
     public Task<ProtocolResponse> RequestCorrelatedAsync(
         string operation,
         object? payload,
         string? correlationId,
         CancellationToken cancellationToken = default) =>
-        RequestCoreAsync(operation, payload, cancellationToken, correlationId);
+        RequestCoreAsync(operation, payload, cancellationToken, correlationId, null);
 
     /// <summary>
     /// Awaits a pending read but gives up after <paramref name="timeout"/>.
@@ -364,16 +367,30 @@ public sealed class ScryClient : IAsyncDisposable
             "connection is now closed; reconnect to continue.");
     }
 
+    /// <param name="serverWait">
+    /// How long the target may legitimately hold this request open (<c>job.wait</c>,
+    /// <c>hook.wait</c>). The client deadline is raised to cover it plus a margin, so a wait longer
+    /// than <see cref="RequestTimeout"/> is not mistaken for a silent target and its connection
+    /// closed. Never lowers the deadline, and an infinite one stays infinite.
+    /// </param>
     private async Task<ProtocolResponse> RequestCoreAsync(
         string operation,
         object? payload,
         CancellationToken cancellationToken,
-        string? correlationId)
+        string? correlationId,
+        TimeSpan? serverWait)
     {
         ThrowIfDisposed();
         await _requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var ioStarted = false;
         var timeout = RequestTimeout;
+        if (timeout != Timeout.InfiniteTimeSpan &&
+            serverWait is { } held &&
+            held + WaitDeadlineMargin > timeout)
+        {
+            timeout = held + WaitDeadlineMargin;
+        }
+
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (timeout != Timeout.InfiniteTimeSpan)
         {
@@ -481,7 +498,8 @@ public sealed class ScryClient : IAsyncDisposable
                 JsonSerializer.SerializeToElement(payload ?? new { }, ScryJson.Options),
                 correlationId),
             cancellationToken,
-            correlationId);
+            correlationId,
+            null);
 
     public Task<ProtocolResponse> GetJobStatusAsync(
         JobHandle job,
@@ -494,10 +512,12 @@ public sealed class ScryClient : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var milliseconds = checked((int)Math.Ceiling(timeout.TotalMilliseconds));
-        return RequestAsync(
+        return RequestCoreAsync(
             "job.wait",
             new JobWaitRequest(job, milliseconds),
-            cancellationToken);
+            cancellationToken,
+            null,
+            timeout);
     }
 
     public Task<ProtocolResponse> CancelJobAsync(
@@ -511,6 +531,49 @@ public sealed class ScryClient : IAsyncDisposable
         int limit = 100,
         CancellationToken cancellationToken = default) =>
         RequestAsync("job.logs", new JobLogsRequest(job, cursor, limit), cancellationToken);
+
+    /// <summary>
+    /// Records every call to a method inside the target - arguments, return value, exception and
+    /// optionally the instance - without changing its behavior. Works for private and non-virtual
+    /// methods. Dispose the returned handle to unpatch. See <see cref="ScryHook"/>.
+    /// </summary>
+    public async Task<ScryHook> AddHookAsync(
+        HookAddRequest request,
+        CancellationToken cancellationToken = default) =>
+        new(this, await RequestResultAsync<HookAddResult>("hook.add", request, cancellationToken)
+            .ConfigureAwait(false));
+
+    public Task<HookListResult> ListHooksAsync(CancellationToken cancellationToken = default) =>
+        RequestResultAsync<HookListResult>("hook.list", null, cancellationToken);
+
+    public Task<HookReadResult> ReadHookAsync(
+        HookReadRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<HookReadResult>("hook.read", request, cancellationToken);
+
+    public Task<HookReadResult> DrainHookAsync(
+        HookReadRequest request,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<HookReadResult>("hook.drain", request, cancellationToken);
+
+    public async Task<HookWaitResult> WaitForHookCallAsync(
+        HookWaitRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await RequestCoreAsync(
+                "hook.wait",
+                request,
+                cancellationToken,
+                null,
+                TimeSpan.FromMilliseconds(request.TimeoutMilliseconds))
+            .ConfigureAwait(false);
+        return ReadResult<HookWaitResult>("hook.wait", response);
+    }
+
+    public Task<HookRemoveResult> RemoveHookAsync(
+        HookHandle hook,
+        CancellationToken cancellationToken = default) =>
+        RequestResultAsync<HookRemoveResult>("hook.remove", new HookQueryRequest(hook), cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -546,6 +609,11 @@ public sealed class ScryClient : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var response = await RequestAsync(operation, payload, cancellationToken).ConfigureAwait(false);
+        return ReadResult<T>(operation, response);
+    }
+
+    private static T ReadResult<T>(string operation, ProtocolResponse response)
+    {
         if (!response.Success)
         {
             throw new ScryRemoteException(response);

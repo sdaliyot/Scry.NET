@@ -16,11 +16,12 @@ public static class ProtocolConstants
             "capabilities", "roots", "inspect", "get", "set", "invoke", "enumerate", "release",
             "evaluate", "execute", "wait", "assert",
             "load-assembly", "list-assemblies", "find-types", "describe-type",
-            "job.start", "job.status", "job.wait", "job.cancel", "job.logs"
+            "job.start", "job.status", "job.wait", "job.cancel", "job.logs",
+            "hook.add", "hook.read", "hook.drain", "hook.wait", "hook.remove", "hook.list"
         });
 
     public static IReadOnlyList<string> FeatureCapabilities { get; } = Array.AsReadOnly(
-        new[] { "bounded-value-projection" });
+        new[] { "bounded-value-projection", "method-hooks" });
 
     /// <summary>
     /// Advertised in a capabilities response only when the host registered an execution marshaller,

@@ -199,6 +199,31 @@ internal sealed class AuditLog : IAsyncDisposable
                             : null;
                     return string.Join(";", new[] { subject, member, shape }.Where(part => part is not null));
 
+                case "hook.add":
+                    // Names only: they say what is being patched and are not secrets.
+                    return string.Join(
+                        ";",
+                        new[] { "type", "method" }
+                            .Where(name => payload.TryGetProperty(name, out var part) && part.ValueKind == JsonValueKind.String)
+                            .Select(name => $"{name}={Bound(payload.GetProperty(name).GetString())}"));
+
+                case "hook.wait":
+                    {
+                        // Like a script's source: only its length and hash, never the text.
+                        if (!payload.TryGetProperty("predicate", out var predicate) ||
+                            predicate.ValueKind != JsonValueKind.String)
+                        {
+                            return null;
+                        }
+
+                        var predicateText = predicate.GetString() ?? string.Empty;
+                        using var predicateHash = SHA256.Create();
+                        return $"predicateLength={predicateText.Length};predicateSha256=" +
+                            BitConverter.ToString(predicateHash.ComputeHash(Encoding.UTF8.GetBytes(predicateText)))
+                                .Replace("-", string.Empty)
+                                .ToLowerInvariant();
+                    }
+
                 case "load-assembly":
                     return payload.TryGetProperty("path", out var path) &&
                         path.ValueKind == JsonValueKind.String

@@ -284,6 +284,114 @@ internal sealed class ExecutionEngine
         }
     }
 
+    /// <summary>
+    /// Separates a hook predicate's cache entries from ordinary submissions: the compiled script is
+    /// bound to <see cref="HookCallGlobals"/> rather than <see cref="ExecutionGlobals"/>, so the same
+    /// source text must never share a cache slot between the two.
+    /// </summary>
+    private const string HookPredicateCachePrefix = "\u0001hook-call\u0001";
+
+    /// <summary>
+    /// Compiles a <c>hook.wait</c> predicate once, so it can then be evaluated against many captured
+    /// calls through <see cref="EvaluatePredicateAsync"/> without paying for compilation, a roots
+    /// snapshot, or a log buffer per call the way a full <c>evaluate</c> would.
+    /// </summary>
+    internal HookPredicate CompilePredicate(
+        string source,
+        IReadOnlyList<string>? requestImports,
+        IReadOnlyList<string>? references,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            throw new ScryOperationException("invalid_request", "predicate must not be empty.");
+        }
+
+        if (source.Length > _options.MaximumSourceLength)
+        {
+            throw new ScryOperationException(
+                "request_limit_exceeded",
+                $"predicate exceeds the {_options.MaximumSourceLength}-character limit.");
+        }
+
+        if (requestImports is { Count: > 0 } &&
+            (requestImports.Count > _options.MaximumExecutionImports || requestImports.Any(string.IsNullOrWhiteSpace)))
+        {
+            throw new ScryOperationException(
+                "request_limit_exceeded",
+                $"imports must contain at most {_options.MaximumExecutionImports} non-empty entries.");
+        }
+
+        var imports = DefaultImports.Concat(requestImports ?? Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var cacheKey = new ScriptCacheKey(HookPredicateCachePrefix + source, imports, references);
+        if (!_scripts.TryGet(cacheKey, out var script, out _))
+        {
+            var options = ScriptOptions.Default
+                .WithEmitDebugInformation(false)
+                .WithReferences(_assemblies.GetMetadataReferences(references, _options.MaximumExecutionReferences))
+                .WithImports(imports);
+            script = CSharpScript.Create<object?>(
+                source,
+                options,
+                typeof(HookCallGlobals),
+                _assemblies.CreateExecutionAssemblyLoader(null));
+            var diagnostics = script.Compile(cancellationToken).Select(ToDiagnostic).ToArray();
+            var errors = diagnostics
+                .Where(diagnostic => diagnostic.Severity == nameof(DiagnosticSeverity.Error))
+                .ToArray();
+            if (errors.Length != 0)
+            {
+                throw new ScryCompilationException(errors);
+            }
+
+            _scripts.Add(cacheKey, script, diagnostics);
+        }
+
+        return new HookPredicate(script);
+    }
+
+    /// <summary>
+    /// Runs a compiled predicate against one captured call and returns whatever it produced (the
+    /// caller decides whether that is a usable boolean). Bounded by the default execution timeout.
+    /// </summary>
+    internal async ValueTask<object?> EvaluatePredicateAsync(
+        HookPredicate predicate,
+        HookCallGlobals globals,
+        string? marshal,
+        CancellationToken cancellationToken)
+    {
+        var marshalToUiThread = MarshalTarget.Resolve(marshal, _configuration.ExecutionMarshaller);
+        using var timeoutSource = new CancellationTokenSource();
+        timeoutSource.CancelAfter(TimeSpan.FromMilliseconds(_options.DefaultExecutionMilliseconds));
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
+        var token = linkedSource.Token;
+
+        // No ConfigureAwait(false) inside, for the same reason as RunAsync: through a marshaller the
+        // dispatcher's SynchronizationContext is current and a predicate that awaits must resume on it.
+        async Task<object?> RunPredicateAsync()
+        {
+            var state = await predicate.Script.RunAsync(globals, cancellationToken: token);
+            return await UnwrapAsync(state.ReturnValue);
+        }
+
+        try
+        {
+            return marshalToUiThread
+                ? await _configuration.ExecutionMarshaller!(RunPredicateAsync, token).ConfigureAwait(false)
+                : await RunPredicateAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new ScryOperationException(
+                "predicate_timed_out",
+                $"The predicate did not finish within {_options.DefaultExecutionMilliseconds} milliseconds.");
+        }
+    }
 
     private void Validate(ExecutionRequest request)
     {

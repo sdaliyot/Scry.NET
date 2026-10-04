@@ -117,7 +117,8 @@ internal static class Cli
             options.TryGetValue("session", out var sessionId);
             sessionId ??= TryGetJobSession(payload);
             options.TryGetValue("correlation", out var correlationId);
-            var persistentJobSession = command == "job.start";
+            // A job and a hook both outlive this connection, so the session that owns them must too.
+            var persistentJobSession = command is "job.start" or "hook.add";
             var request = CliContract.PrepareRequest(command, payload);
             using var interrupt = new CancellationTokenSource();
             using var interruptHandler = InstallInterruptHandler(interrupt);
@@ -138,6 +139,14 @@ internal static class Cli
             if (requestTimeout is { } configured)
             {
                 client.RequestTimeout = configured;
+            }
+            else if (request.Operation == "hook.wait" &&
+                TryGetWaitMilliseconds(request.Payload) is { } waitMilliseconds &&
+                TimeSpan.FromMilliseconds(waitMilliseconds + 15_000) > client.RequestTimeout)
+            {
+                // The target legitimately holds this request open for the whole wait; the default
+                // 60-second deadline would otherwise cut a longer wait short and close the connection.
+                client.RequestTimeout = TimeSpan.FromMilliseconds(waitMilliseconds + 15_000);
             }
 
             var response = await client.RequestCorrelatedAsync(
@@ -201,23 +210,27 @@ internal static class Cli
     private static (string Command, string[] OptionArguments) ParseCommand(string[] args)
     {
         var command = args[0].ToLowerInvariant();
-        if (command != "jobs")
+        if (command is not ("jobs" or "hooks"))
         {
             return (command, args[1..]);
         }
 
+        var actions = command == "jobs"
+            ? new[] { "start", "status", "wait", "cancel", "logs" }
+            : new[] { "add", "read", "drain", "wait", "remove", "list" };
         if (args.Length < 2)
         {
-            throw new CliUsageException("The jobs command requires start, status, wait, cancel, or logs.");
+            throw new CliUsageException(
+                $"The {command} command requires {string.Join(", ", actions.Take(actions.Length - 1))}, or {actions[^1]}.");
         }
 
         var action = args[1].ToLowerInvariant();
-        if (action is not ("start" or "status" or "wait" or "cancel" or "logs"))
+        if (!actions.Contains(action))
         {
-            throw new CliUsageException($"Unknown jobs action '{action}'.");
+            throw new CliUsageException($"Unknown {command} action '{action}'.");
         }
 
-        return ($"job.{action}", args[2..]);
+        return ($"{command.TrimEnd('s')}.{action}", args[2..]);
     }
 
     private static async Task<int> AttachAsync(string[] args)
@@ -399,12 +412,12 @@ internal static class Cli
                     address,
                     sessionId,
                     clientName: "scry-scenario",
-                    ephemeralSession: sessionId is null && command.Operation != "job.start").ConfigureAwait(false)
+                    ephemeralSession: sessionId is null && command.Operation is not ("job.start" or "hook.add")).ConfigureAwait(false)
                 : await ScryClient.ConnectAsync(
                     descriptor,
                     sessionId,
                     clientName: "scry-scenario",
-                    ephemeralSession: sessionId is null && command.Operation != "job.start").ConfigureAwait(false);
+                    ephemeralSession: sessionId is null && command.Operation is not ("job.start" or "hook.add")).ConfigureAwait(false);
             var request = CliContract.PrepareRequest(command.Operation, command.Payload);
             var response = await client.RequestCorrelatedAsync(
                 request.Operation,
@@ -692,11 +705,26 @@ internal static class Cli
         return options;
     }
 
+    private static int? TryGetWaitMilliseconds(JsonElement payload) =>
+        payload.ValueKind == JsonValueKind.Object &&
+        payload.TryGetProperty("timeoutMilliseconds", out var value) &&
+        value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt32(out var milliseconds)
+            ? milliseconds
+            : null;
+
+    /// <summary>The session named by a job or hook handle in the payload, so the command resumes it.</summary>
     private static string? TryGetJobSession(JsonElement payload)
     {
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
         var job = payload.EnumerateObject()
             .FirstOrDefault(property =>
-                string.Equals(property.Name, "job", StringComparison.OrdinalIgnoreCase))
+                string.Equals(property.Name, "job", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(property.Name, "hook", StringComparison.OrdinalIgnoreCase))
             .Value;
         if (job.ValueKind != JsonValueKind.Object)
         {

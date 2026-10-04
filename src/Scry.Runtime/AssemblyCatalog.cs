@@ -119,35 +119,45 @@ internal sealed class AssemblyCatalog
             .ToArray();
     }
 
-    public TypeDescription DescribeType(DescribeTypeRequest request)
+    /// <summary>
+    /// Resolves exactly one loaded type by full or assembly-qualified name, the same way
+    /// <c>describe-type</c> does: <c>type_not_found</c> when none match and <c>ambiguous_type</c> when
+    /// the name exists in several loaded assemblies and <paramref name="assembly"/> does not narrow it.
+    /// </summary>
+    public Type ResolveType(string? typeName, string? assembly, string? loadContext, bool includeNonPublic)
     {
-        if (string.IsNullOrWhiteSpace(request.Type))
+        if (string.IsNullOrWhiteSpace(typeName))
         {
             throw new ScryOperationException("invalid_request", "type is required.");
         }
 
-        var matches = SelectAssemblies(request.Assembly, request.LoadContext)
+        var matches = SelectAssemblies(assembly, loadContext)
             .SelectMany(GetLoadableTypes)
             .Where(type =>
-                string.Equals(type.FullName, request.Type, StringComparison.Ordinal) ||
-                string.Equals(type.AssemblyQualifiedName, request.Type, StringComparison.Ordinal))
-            .Where(type => request.IncludeNonPublic || IsPublic(type))
+                string.Equals(type.FullName, typeName, StringComparison.Ordinal) ||
+                string.Equals(type.AssemblyQualifiedName, typeName, StringComparison.Ordinal))
+            .Where(type => includeNonPublic || IsPublic(type))
             .Distinct()
             .Take(2)
             .ToArray();
         if (matches.Length == 0)
         {
-            throw new ScryOperationException("type_not_found", $"Type '{request.Type}' was not found.");
+            throw new ScryOperationException("type_not_found", $"Type '{typeName}' was not found.");
         }
 
         if (matches.Length > 1)
         {
             throw new ScryOperationException(
                 "ambiguous_type",
-                $"Type '{request.Type}' exists in multiple loaded assemblies; specify assembly.");
+                $"Type '{typeName}' exists in multiple loaded assemblies; specify assembly.");
         }
 
-        var type = matches[0];
+        return matches[0];
+    }
+
+    public TypeDescription DescribeType(DescribeTypeRequest request)
+    {
+        var type = ResolveType(request.Type, request.Assembly, request.LoadContext, request.IncludeNonPublic);
         var flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static |
             (request.IncludeNonPublic ? BindingFlags.NonPublic : 0);
         var members = type.GetMembers(flags)

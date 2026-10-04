@@ -88,6 +88,30 @@ public sealed class JobAndScenarioTests
         Assert.Equal("job_not_found", expired.Error?.Code);
     }
 
+    /// <summary>
+    /// A <c>job.wait</c> the target legitimately holds open for longer than the client's
+    /// <see cref="ScryClient.RequestTimeout"/> must not be mistaken for a silent target. Before the
+    /// client raised its own deadline to cover the wait, this threw <see cref="TimeoutException"/>
+    /// at the 2-second mark and closed the connection while the job was still running.
+    /// </summary>
+    [Fact]
+    public async Task Waiting_on_a_job_longer_than_the_client_request_timeout_is_not_cut_short()
+    {
+        await using var host = JobTestHost.Start();
+        await using var client = await ScryClient.ConnectAsync(host.Host.DescriptorPath);
+        client.RequestTimeout = TimeSpan.FromSeconds(2);
+        var start = await client.StartJobAsync(
+            "invoke",
+            new { registeredOperation = "work", arguments = new { milliseconds = 4000 } });
+        var job = start.Result!.Value.Deserialize<JobSnapshot>(ScryJson.Options)!;
+
+        var waited = await client.WaitForJobAsync(job.Job, TimeSpan.FromSeconds(15));
+
+        var result = waited.Result!.Value.Deserialize<JobWaitResult>(ScryJson.Options)!;
+        Assert.False(result.TimedOut);
+        Assert.Equal(JobStates.Succeeded, result.Job.State);
+    }
+
     [Fact]
     public async Task Discovery_resolves_additional_aliases_and_rejects_ambiguous_aliases()
     {

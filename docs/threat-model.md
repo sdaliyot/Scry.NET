@@ -130,6 +130,35 @@ watch for and commonly block or quarantine. Do not weaken security controls glob
 mode work; authorize the specific binary, or test in an isolated environment. **Never attach to a
 process you do not own or do not have explicit permission to test.**
 
+## Method hooks
+
+`hook.add` patches a method inside the target with Harmony. That is a materially stronger primitive
+than reading state, and it is worth being exact about what it does and does not change.
+
+- **It writes executable memory.** Harmony redirects a method's compiled code, the same class of
+  write that endpoint-security products watch for alongside remote thread creation. A hardened machine
+  may block, quarantine or alert on it, separately from anything attach mode already triggered. As
+  with attach, authorize the specific binary or use an isolated environment rather than weakening
+  controls globally.
+- **It is record-only.** The patch does not alter arguments, return values or exceptions, does not skip
+  the original, and catches everything it does (failures are counted, not raised). It does add work
+  to every call of the hooked method - an allocation, two clock reads, a short lock - so hooking a
+  method on a hot path has a cost.
+- **It retains target data.** A buffered call holds strong references to the argument, return,
+  exception and instance objects until it is dropped or read-and-drained. Argument values are readable
+  by anyone who can read the hook, exactly as `evaluate` could read them; hooks add no new access, but
+  they make transient values (a password passed to a method, a token returned by one) readable after
+  the fact. Keep `capacity` small for sensitive methods, `drain` when done, and remove the hook.
+- **A predicate is executed code.** `hook.wait` compiles and runs C# like `evaluate` and is bound by the
+  same limits and the same trust boundary. It runs in the request, not in the patch. The audit log
+  records its length and hash, never its text.
+- **Cleanup does not depend on the client.** A hook is owned by its session; ending the session or the
+  endpoint unpatches the method. A crashed client therefore leaves a patch behind only until its
+  session lease expires (30 minutes idle by default). `0Harmony.dll` itself cannot be unloaded from a
+  .NET Framework AppDomain once loaded, but unpatching fully restores the original method.
+- **A foreign Harmony is reported, not trusted.** If the target loads its own `0Harmony`, the runtime
+  reports it and refuses where mixing the two copies could not be undone safely.
+
 ## Unsupported and out of scope
 
 Current, as of this document:

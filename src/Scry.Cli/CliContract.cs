@@ -371,6 +371,81 @@ internal static class CliContract
                 F("limit", "integer", false, "Page size from 1 through 1000.")
             ],
             "JobLogResult."),
+        Hook(
+            "hooks add",
+            "hook.add",
+            "Record every call to a method inside the target - private and non-virtual methods " +
+            "included - without changing its behavior. Hooks belong to a persistent session: pass " +
+            "the sessionId this returns as --session (or use the hook handle, which carries it) on " +
+            "later hook commands. The method is restored when the hook is removed or its session ends.",
+            [
+                F("type", "string", true, "Full name of the declaring type, as find-types reports it."),
+                F("method", "string", true, "Method name, '.ctor' for a constructor, or get_X/set_X for a property accessor."),
+                F("parameterTypes", "string[]", false, "Selects an overload: each entry matches a parameter's full name, simple name or C# keyword (string, int)."),
+                F("assembly", "string", false, "Assembly selector when the type name exists in several loaded assemblies."),
+                F("loadContext", "string", false, "Load-context selector."),
+                F("bindingFlags", "string", false, "Comma-separated System.Reflection.BindingFlags. Default: Public, NonPublic, Instance, Static, DeclaredOnly."),
+                F("captureArguments", "boolean", false, "Record argument values. Default true."),
+                F("captureReturnValue", "boolean", false, "Record the return value. Default true."),
+                F("captureException", "boolean", false, "Record an exception the method threw. Default true."),
+                F("captureInstance", "boolean", false, "Record 'this'. Default false."),
+                F("capacity", "integer", false, "Calls kept; the oldest are dropped beyond it. Default 1000, at most 10000.")
+            ],
+            "HookAddResult: the hook handle, whether it was newly created, the Harmony version in " +
+            "use, an inlining risk assessment, and warnings. A high inlining risk means a caller " +
+            "that inlined the method bypasses the hook."),
+        Hook(
+            "hooks read",
+            "hook.read",
+            "Read recorded calls from a cursor without removing them.",
+            [
+                F("hook", "HookHandle", true, "Target/session/hook-qualified handle."),
+                F("cursor", "integer", false, "First sequence number wanted; sequence numbers start at 0."),
+                F("limit", "integer", false, "Page size from 1 through 1000."),
+                F("includeReferences", "boolean", false, "Lease a session handle for each reference-type value and the exception, instead of reporting its type only.")
+            ],
+            "HookReadResult: calls with arguments, return value, exception and thread, plus " +
+            "nextCursor, truncated, droppedCalls and captureFailures."),
+        Hook(
+            "hooks drain",
+            "hook.drain",
+            "Read recorded calls, then discard the ones returned.",
+            [
+                F("hook", "HookHandle", true, "Target/session/hook-qualified handle."),
+                F("cursor", "integer", false, "First sequence number wanted."),
+                F("limit", "integer", false, "Page size from 1 through 1000."),
+                F("includeReferences", "boolean", false, "Lease a session handle for each reference-type value.")
+            ],
+            "HookReadResult."),
+        Hook(
+            "hooks wait",
+            "hook.wait",
+            "Wait for a recorded call that satisfies a C# predicate.",
+            [
+                F("hook", "HookHandle", true, "Target/session/hook-qualified handle."),
+                F("predicate", "string", false, "C# expression evaluated in the target against each buffered call, with Args (object[]), ReturnValue, Exception, Instance and Call (Sequence, ThreadId, Threw...) in scope. Must produce a bool; omit it to match the first call."),
+                F("cursor", "integer", false, "Only consider calls at or after this sequence number; pass the previous nextCursor to see only newer calls."),
+                F("timeoutMilliseconds", "integer", false, "Wait timeout from 0 through 300000. Default 30000."),
+                F("imports", "string[]", false, "Additional namespaces for the predicate."),
+                F("references", "string[]", false, "Already-loaded assembly names to compile the predicate against."),
+                F("marshal", "ui", false, "Evaluate the predicate on the host UI thread."),
+                F("includeReferences", "boolean", false, "Lease handles in the returned call.")
+            ],
+            "HookWaitResult; timedOut is not an error and carries diagnostics, such as an inlining " +
+            "warning when no call was ever recorded."),
+        Hook(
+            "hooks remove",
+            "hook.remove",
+            "Remove a hook and restore the original method.",
+            [F("hook", "HookHandle", true, "Target/session/hook-qualified handle.")],
+            "HookRemoveResult."),
+        Hook(
+            "hooks list",
+            "hook.list",
+            "List the hooks of the current session. Needs --session, because hooks belong to a " +
+            "persistent session and an ephemeral one has none.",
+            [],
+            "HookListResult, including the Harmony version in use and any foreign Harmony copies."),
         Scenario(
             "scenario",
             "Run ordered target commands sequentially or concurrently.",
@@ -560,6 +635,7 @@ internal static class CliContract
                   scry version
                   scry <command> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry jobs <start|status|wait|cancel|logs> (--target <id-or-alias> | --descriptor <path>) [options]
+                  scry hooks <add|read|drain|wait|remove|list> (--target <id-or-alias> | --descriptor <path>) [options]
                   scry <scenario|batch> --input <file|->
                   scry help [command]
 
@@ -570,6 +646,7 @@ internal static class CliContract
                   Validation: wait, assert
                   Assemblies: load-assembly, list-assemblies, find-types, describe-type
                   Jobs:       jobs start, jobs status, jobs wait, jobs cancel, jobs logs
+                  Hooks:      hooks add, hooks read, hooks drain, hooks wait, hooks remove, hooks list
                   Flows:      scenario, batch
                   WPF:        wpf.snapshot, wpf.wait, wpf.assert, wpf.screenshot
                   WinForms:   winforms.snapshot, winforms.wait, winforms.assert, winforms.screenshot
@@ -654,7 +731,7 @@ internal static class CliContract
         writer.WriteLine($"Result: {definition.Result}");
         writer.WriteLine();
         writer.WriteLine($"Example: {definition.Example}");
-        if (definition.Kind is "target" or "execution" or "job" or "adapter")
+        if (definition.Kind is "target" or "execution" or "job" or "hook" or "adapter")
         {
             writer.WriteLine(
                 "Target selection: specify exactly one of --target <id-or-alias> or --descriptor <path>.");
@@ -727,14 +804,14 @@ internal static class CliContract
                 kind = command.Kind,
                 summary = command.Summary,
                 usage = command.Usage,
-                targetSelector = command.Kind is "target" or "execution" or "job" or "adapter"
+                targetSelector = command.Kind is "target" or "execution" or "job" or "hook" or "adapter"
                     ? "required"
                     : "none",
                 input = command.Input,
                 request = new { type = "object", fields = command.Fields },
                 result = new
                 {
-                    envelope = command.Kind is "target" or "execution" or "job" or "adapter"
+                    envelope = command.Kind is "target" or "execution" or "job" or "hook" or "adapter"
                         ? "protocolResponse"
                         : command.Path is "scenario" or "batch"
                             ? "scenarioResult"
@@ -760,13 +837,13 @@ internal static class CliContract
             return null;
         }
 
-        if (parts.Length == 1 && parts[0] == "jobs")
+        if (parts.Length == 1 && parts[0] is "jobs" or "hooks")
         {
             return null;
         }
 
-        return parts.Length >= 2 && parts[0] == "jobs"
-            ? $"jobs {parts[1]}"
+        return parts.Length >= 2 && parts[0] is "jobs" or "hooks"
+            ? $"{parts[0]} {parts[1]}"
             : parts[0];
     }
 
@@ -831,6 +908,23 @@ internal static class CliContract
             path,
             operation,
             "job",
+            summary,
+            $"scry {path} (--target <id-or-alias> | --descriptor <path>) --request <file|->",
+            "JSON object from --request/--input or redirected stdin.",
+            fields,
+            result,
+            $"scry {path} --target my-app --request {operation}.json");
+
+    private static CliCommand Hook(
+        string path,
+        string operation,
+        string summary,
+        IReadOnlyList<CliField> fields,
+        string result) =>
+        new(
+            path,
+            operation,
+            "hook",
             summary,
             $"scry {path} (--target <id-or-alias> | --descriptor <path>) --request <file|->",
             "JSON object from --request/--input or redirected stdin.",

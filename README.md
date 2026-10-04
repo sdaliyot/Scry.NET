@@ -495,6 +495,84 @@ a reused script from a cold compile.
 `assert` evaluates once and fails the request with `assertion_failed` and a description of the
 comparison. Use `wait` to gate, `assert` to fail.
 
+## Hooking method calls
+
+`evaluate`, `get` and `wait` observe *state*. To observe a *call* - what a method was given, what it
+returned, whether it threw - hook it. A hook records every call to one method inside the target
+without changing what the method does, and works on private, non-virtual methods called on `this`,
+which no proxy or wrapper can intercept. It is built on [Harmony](https://github.com/pardeike/Harmony),
+which is loaded into the endpoint's own AppDomain the first time a hook is added and never before.
+
+```csharp
+await using var hook = await client.AddHookAsync(new HookAddRequest(
+    Type: "Adaptor.SyncOrchestrator",
+    Method: "PushGroupsAndAwaitTerminal"));   // ParameterTypes: new[] { "Group[]" } picks an overload
+
+// ... trigger the change elsewhere ...
+
+// The predicate is C#, evaluated in the target against the real captured objects.
+var call = await hook.WaitForCallAsync(
+    "((Group[])Args[0]).Any(g => g.ID == \"9\")",
+    timeout: TimeSpan.FromSeconds(60));
+bool succeeded = call.GetReturnValue<bool>();
+// leaving the scope disposes the hook, which restores the original method
+```
+
+```powershell
+scry hooks add    --target app --request hook-add.json      # prints a hook handle and its sessionId
+scry hooks wait   --target app --request hook-wait.json     # {"hook": <handle>, "predicate": "...", "timeoutMilliseconds": 60000}
+scry hooks read   --target app --request hook-read.json     # {"hook": <handle>, "cursor": 0}
+scry hooks remove --target app --request hook-remove.json
+```
+
+- **What is captured.** Per call: a sequence number (from 0), start and end time, the thread, the
+  arguments, the return value, or the exception if it threw - and optionally `this`
+  (`captureInstance`). Scalars and value types are recorded in full, as they were at call time.
+  A reference-type value is reported by type only (`kind: "preview"`) unless the request sets
+  `includeReferences`, which leases a session handle you can then `inspect`.
+- **Predicates.** `Args`, `ReturnValue`, `Exception`, `Instance` and `Call` are in scope, as the
+  real objects; the predicate must produce a `bool`. It runs in the waiting request, never inside
+  the patched method, so a slow or throwing predicate cannot affect the target. A bad predicate
+  fails at once with `compilation_failed`, `invalid_predicate` or `predicate_failed`. Objects are
+  evaluated as they are when the wait looks at them, so a mutable argument may have changed since
+  the call.
+- **Buffer.** Each hook keeps the last `capacity` calls (default 1000). Older calls are dropped and
+  counted: `droppedCalls`, and `truncated` on a read whose cursor is behind. Read with
+  `hook.read`, or `hook.drain` to discard what was returned. A buffered call keeps its argument
+  objects alive, so keep `capacity` modest for large arguments.
+- **Never throws into the target.** The patch catches everything; a capture that fails is counted
+  in `captureFailures`.
+- **Lifetime.** A hook belongs to the session that created it, and the handle carries that session,
+  so separate CLI invocations resume it. Removing the hook, ending its session (an ephemeral
+  session on disconnect, any session when its lease expires) or shutting the endpoint down
+  unpatches the method. Adding the same method twice in one session returns the existing hook.
+- **In another AppDomain.** A hook applies where the type lives. Start a sibling endpoint in that
+  AppDomain with `appdomain.start` (see [Reaching a chosen AppDomain](#reaching-a-chosen-appdomain))
+  and hook through it; each endpoint manages its own hooks.
+
+**Limits worth knowing, and how Scry tells you about them.**
+
+- **Inlining.** The JIT can inline a small method into its callers, and a call that was inlined
+  never reaches the patch. The runtime has no way to ask whether that happened, so `hook.add`
+  reports a risk (`none`, `low`, `medium`, `high`) from the method's metadata - `high` for an
+  `AggressiveInlining` or tiny method - with a warning, and a `hook.wait` that times out with no call
+  ever recorded says so in its `diagnostics`. Methods marked `NoInlining`, large methods and
+  methods with exception handling are not inlined.
+- **Another Harmony.** `0Harmony` is not strong-named, so the CLR binds it by simple name: if the
+  target already loaded its own copy, Scry's reference resolves to that one. `hook.add` reports the
+  Harmony it is using and any other copy it can see; it fails with `hooks_unavailable` if the loaded
+  copy is older than the one Scry needs, and with `method_patched_by_foreign_harmony` if a different
+  copy already patched that method.
+- **Async methods.** The call is recorded when the method returns its `Task`, not when the work
+  finishes; `ReturnValue` is that `Task`.
+- **Not hookable.** Abstract, open-generic, native (`extern`/P/Invoke) methods, and methods that
+  take or return a pointer, `ref` return or ref struct, fail with `method_not_patchable`.
+- **Security software.** Patching rewrites executable memory, which is what EDR and antivirus
+  products watch for. See the [threat model](docs/threat-model.md).
+- **Runtime updates.** Each new .NET runtime can need a newer Harmony. Scry pins Lib.Harmony 2.4.2
+  and tests it on .NET 8 and .NET Framework 4.8; a runtime that breaks it surfaces as
+  `hook_patch_failed`.
+
 ## Reaching UI-owned state
 
 WPF and WinForms objects have thread affinity, and requests are served on a non-UI thread. So

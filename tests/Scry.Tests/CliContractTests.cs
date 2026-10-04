@@ -78,6 +78,34 @@ public sealed class CliContractTests
     }
 
     [Fact]
+    public async Task Hooks_commands_are_documented_and_an_unknown_action_is_a_usage_error()
+    {
+        var cliPath = FindBuiltCli();
+
+        var topLevelHelp = await RunCliAsync(cliPath, ["--help"]);
+        Assert.Contains("scry hooks <add|read|drain|wait|remove|list>", topLevelHelp.StandardOutput, StringComparison.Ordinal);
+
+        var addHelp = await RunCliAsync(cliPath, ["hooks", "add", "--help"]);
+        Assert.Equal(0, addHelp.ExitCode);
+        Assert.Contains("Usage: scry hooks add", addHelp.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("parameterTypes", addHelp.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("captureInstance", addHelp.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("inlining", addHelp.StandardOutput, StringComparison.Ordinal);
+
+        var waitHelp = await RunCliAsync(cliPath, ["hooks", "wait", "--help"]);
+        Assert.Equal(0, waitHelp.ExitCode);
+        Assert.Contains("predicate", waitHelp.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("Target selection", waitHelp.StandardOutput, StringComparison.Ordinal);
+
+        var unknown = await RunCliAsync(cliPath, ["hooks", "frobnicate", "--descriptor", "unused.json"]);
+        Assert.Equal(2, unknown.ExitCode);
+        Assert.Contains("Unknown hooks action", unknown.StandardOutput + unknown.StandardError, StringComparison.Ordinal);
+
+        var bare = await RunCliAsync(cliPath, ["hooks"]);
+        Assert.Equal(2, bare.ExitCode);
+    }
+
+    [Fact]
     public async Task Exit_codes_and_envelopes_distinguish_validation_target_and_operation_failures()
     {
         var cliPath = FindBuiltCli();

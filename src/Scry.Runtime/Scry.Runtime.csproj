@@ -6,6 +6,14 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.14.0" />
+    <!--
+      Method hooks (hook.* operations). The merged Lib.Harmony package, not Lib.Harmony.Thin: Thin
+      has the same code but depends on MonoMod.Core and its own dependency chain, which would stage
+      several DLLs instead of one - more files that can collide with a target's own copies. Every
+      Harmony-touching member lives in Hooks/HookPatcher.cs so 0Harmony.dll is only resolved on the
+      first hook.add, never at attach time.
+    -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
   </ItemGroup>
 
   <ItemGroup>

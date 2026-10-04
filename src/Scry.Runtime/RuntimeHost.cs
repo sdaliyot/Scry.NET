@@ -33,6 +33,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
     private readonly SessionManager _sessions;
     private readonly OperationDispatcher _dispatcher;
     private readonly JobManager _jobs;
+    private readonly HookManager _hooks;
     private readonly AuditLog _audit;
     private readonly Task _pipeAcceptTask;
     private readonly Task _tcpAcceptTask;
@@ -78,7 +79,9 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
             options.MaximumAssemblyBytes < 1 ||
             options.MaximumJobs < 1 ||
             options.MaximumJobLogEntries < 1 ||
-            options.MaximumJobLogMessageLength < 1)
+            options.MaximumJobLogMessageLength < 1 ||
+            options.MaximumHooks < 1 ||
+            options.MaximumHookCapacity < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options),
@@ -183,6 +186,13 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                 options.MaximumJobs,
                 options.MaximumJobLogEntries,
                 options.MaximumJobLogMessageLength);
+            _hooks = new(
+                assemblies,
+                execution,
+                targetId,
+                options.MaximumHooks,
+                options.MaximumHookCapacity);
+            _sessions.SessionDisposed = _hooks.RemoveSession;
             _audit = new(
                 options.AuditEnabled,
                 options.AuditDirectory,
@@ -288,6 +298,7 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         }
 
         _jobs.Dispose();
+        _hooks.Dispose();
         _sessions.Dispose();
         CleanupDescriptor();
         _stopping.Dispose();
@@ -565,7 +576,13 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
                             session,
                             correlationId,
                             cancellationToken).ConfigureAwait(false)
-                        : await _dispatcher.DispatchAsync(
+                        : request.Operation.StartsWith("hook.", StringComparison.Ordinal)
+                            ? await _hooks.DispatchAsync(
+                                request.Operation,
+                                request.Payload,
+                                session,
+                                cancellationToken).ConfigureAwait(false)
+                            : await _dispatcher.DispatchAsync(
                             request.Operation,
                             request.Payload,
                             session,

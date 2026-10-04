@@ -402,6 +402,12 @@ failed request with a non-zero exit code.
 | `job.wait` | job, timeoutMilliseconds (0-300000) |
 | `job.cancel` | job |
 | `job.logs` | job, cursor, limit (1-1000) |
+| `hook.add` | type, method, parameterTypes, assembly, loadContext, bindingFlags, captureArguments, captureReturnValue, captureException, captureInstance, capacity |
+| `hook.read` | hook, cursor, limit (1-1000), includeReferences |
+| `hook.drain` | hook, cursor, limit (1-1000), includeReferences (reads, then discards what it returned) |
+| `hook.wait` | hook, predicate, cursor, timeoutMilliseconds (0-300000), imports, references, marshal, includeReferences |
+| `hook.remove` | hook |
+| `hook.list` | none (the calling session's hooks) |
 
 Values are returned as `RemoteValue`. Existing scalar types remain inline as `kind: "scalar"`, reference types receive an `ExternalReference`, and other value types are returned as `kind: "value"` with the negotiated `bounded-value-projection` capability. Struct projections recurse through value types to four levels and 64 total members, represent nested strings longer than 1,024 characters with a truncated `$value` marker, report inaccessible or throwing members with `$error`, and stop at reference-type members with a type marker. They never consume leased handles, so repeated reads of an unchanged struct have value semantics rather than artificial boxed identity.
 
@@ -554,6 +560,69 @@ scry jobs start --target my-test-target --correlation build-42 --request job-sta
 scry jobs wait --target my-test-target --request job-wait.json
 ```
 
+## Method hooks
+
+`hook.add|read|drain|wait|remove|list` record calls to a method inside the target. They are built-in
+operations in `Scry.Runtime`, dispatched by `HookManager` (`src/Scry.Runtime/Hooks/`) next to
+`JobManager`. They are not adapter-registered operations, for two reasons: a registered operation
+receives no `SessionState`, so it could neither lease handles nor follow a session's lifetime; and a
+sibling endpoint from `appdomain.start` runs `EndpointHost.Start` with no `configure`, so it only has
+what is in Runtime and Endpoint - which is exactly where hooks must be to work in a plugin AppDomain.
+
+**Where Harmony lives.** `Lib.Harmony` 2.4.2 is a `PackageReference` of `Scry.Runtime`; NuGet picks the
+`net452` build for the net462 leg and the `net8.0` build for net8.0, and `Scry.Injector.Payload`'s
+`EnableDynamicLoading` stages `0Harmony.dll` into `payload/netfx` and `payload/net` with no extra
+target. The merged package is used, not `Lib.Harmony.Thin`: the code is the same, but Thin depends on
+`MonoMod.Core` and its own dependency chain, which would stage several DLLs instead of one. Every
+member that names a Harmony type is in `HookPatcher`, called only through `NoInlining` entry points,
+so the JIT resolves `0Harmony` on the first `hook.add` - never at attach time. On .NET Framework it
+resolves through the payload's (or `DomainEndpointBootstrapper`'s) `AssemblyResolve` handler; on
+.NET through the payload's `deps.json`. `0Harmony` has no strong name, so binding redirects never
+apply to it and it does not take part in the attach-time `BindingRedirectComparison` check.
+
+**One patch per method, many hooks.** `HookPatcher` is static per AppDomain and keeps a refcounted
+`MethodHookState` per patched method; hooks from different sessions or sibling endpoints share the one
+Harmony patch and fan out from it. The first subscriber patches, the last unsubscribe calls
+`Unpatch(method, HarmonyPatchType.All, "scry.net.hooks")`, which removes only this runtime's patches and
+leaves another Harmony user's in place. The patch is a prefix (captures the arguments and instance), a
+postfix (a normal return and `__result`) and a finalizer (an exception; it returns `void`, so the
+original exception propagates unchanged). There are static/instance and void/value variants because
+Harmony can only inject `__instance` and `__result` where they exist. All run at `Priority.Last`, so the
+prefix sees the arguments the original will really receive and the postfix the settled result.
+
+**Never into the target.** Patch bodies catch everything and count it (`captureFailures`), allocate
+only the invocation record, take a short lock to append to the ring, and carry a `[ThreadStatic]`
+guard so hooking a method the capture code itself calls cannot recurse.
+
+**Buffer and cursors.** `HookBuffer` is a bounded ring with monotonic sequence numbers from 0.
+`hook.read` mirrors `job.logs`: a cursor, `oldestCursor`, `nextCursor`, `truncated`, `hasMore`, and the
+frame byte budget. `hook.wait` compiles its predicate once (`ExecutionEngine.CompilePredicate`, cached
+under a key prefix so it never collides with an ordinary script), then evaluates it per buffered call
+through `EvaluatePredicateAsync`, which skips the roots snapshot, log buffer and linked cancellation
+that a full `evaluate` pays for. The predicate's globals are `HookCallGlobals`: `Args`, `ReturnValue`,
+`Exception`, `Instance`, `Call`. It runs in the waiting request; the patch never runs user code. A
+wait times out as `timedOut: true`, never as an error, like `job.wait`; the client raises its own
+deadline to cover the wait so a wait longer than `RequestTimeout` is not cut short.
+
+**Lifetime.** A hook does not pin its session, unlike a job. `SessionManager.SessionDisposed` fires
+when a session is disposed (an ephemeral session on disconnect, lease expiry, shutdown) and
+`HookManager.RemoveSession` unpatches that session's hooks; `RuntimeHost.DisposeAsync` unpatches the
+rest. `hook.add` is idempotent per (session, method). Limits: `MaximumHooks` (256) and
+`MaximumHookCapacity` (10000) on the endpoint options.
+
+**Diagnostics instead of silence.** `HookInlining` derives an inlining risk from method metadata,
+because the runtime has no query for "was this inlined" - and on .NET the JIT's inlining events only
+cover methods compiled after a listener attaches, which misses every caller compiled before an
+attach. `HarmonyEnvironment` reports the Harmony actually resolved and any other `0Harmony` or
+file-backed `MonoMod.*` assembly in the AppDomain (Harmony's own in-memory helper assemblies are
+ignored), refuses a loaded Harmony older than the compiled one (`hooks_unavailable`), and refuses a
+method another Harmony copy already patched (`method_patched_by_foreign_harmony`), because two
+independent copies keep separate patch state and a stacked detour could not be removed safely.
+
+**Pinned Harmony.** Each new .NET runtime can need a newer Harmony. Bump `Lib.Harmony` deliberately and
+re-run `HookOperationTests` (in-process, net8.0 and net462, x64 and x86) and
+`HookAttachIntegrationTests` (attached, .NET and .NET Framework including a non-default AppDomain).
+
 ## Multi-target scenarios
 
 `scry scenario` (also `scry batch`) accepts one object from `--input`, `--json`, or redirected stdin. Commands run in input order for `sequential` mode or in parallel for `concurrent` mode. Concurrent results are still emitted in input order. Each command explicitly selects exactly one target ID/alias or descriptor path and receives its own structured response envelope.
@@ -602,12 +671,20 @@ dotnet build Scry.sln -c Release
 dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net8.0 --no-build
 dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 --artifacts-path artifacts\net462-x64 -p:PlatformTarget=x64 -- RunConfiguration.TargetPlatform=x64
 dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net462 --artifacts-path artifacts\net462-x86 -p:PlatformTarget=x86 -- RunConfiguration.TargetPlatform=x86
+$env:SCRY_EXPECT_BITNESS = "x86"; dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net8.0 --no-build --filter "FullyQualifiedName~HookOperationTests" -- RunConfiguration.TargetPlatform=x86
 dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462
 dotnet test tests\Scry.WinForms.Tests\Scry.WinForms.Tests.csproj -c Release -f net462
 dotnet format Scry.sln --verify-no-changes --no-restore
 ```
 
 The net462 suite executes an embedded endpoint on the installed desktop CLR and covers framing (including partial and truncated reads), discovery, current-user pipe ACLs, capability authentication, sessions and handles, reflection, exception projection, limits, Roslyn evaluate/execute, assembly discovery/loading, and the unsupported isolated-policy response. The architecture-specific runs assert that the test host is actually x64 or x86.
+
+Method hooks are covered at three levels: `HookOperationTests` (in-process, so it runs in every leg above,
+including net462 x86/x64 and - through the extra step - .NET 8 x86, which needs an x86 .NET 8 runtime; the
+script installs one on a CI runner and skips with a warning on a machine without one), and
+`HookAttachIntegrationTests` (net8.0, x64: attaches the CLI to an unmodified .NET 8 process, an unmodified
+.NET Framework process, and a plugin in a second .NET Framework AppDomain, hooks a private method, waits on a
+predicate, removes the hook, and checks inside the target that Harmony no longer reports a patch).
 
 ## Extensibility boundaries
 

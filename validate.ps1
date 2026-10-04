@@ -86,6 +86,43 @@ try {
         }
     }
 
+    if (-not $Quick) {
+        # The net462 legs above cover x86 on .NET Framework; this covers it on modern .NET. Only the
+        # in-process hook tests run here: Harmony patches native code, so bitness is what can differ,
+        # whereas the attach tests are x64-only by design. The net8.0 test assembly is AnyCPU, so the
+        # build above is reused and only the test host's platform changes.
+        $x86Runtime = Join-Path ${env:ProgramFiles(x86)} "dotnet\shared\Microsoft.NETCore.App"
+        if (-not (Test-Path (Join-Path $x86Runtime "8.*"))) {
+            if ($env:GITHUB_ACTIONS -eq "true") {
+                # CI runners ship x64 only; install the matching x86 runtime where the x86 test
+                # host looks for it. Not done on a developer machine, which would be a surprise.
+                Invoke-Step "Install the x86 .NET 8 runtime" {
+                    $installer = Join-Path ([System.IO.Path]::GetTempPath()) "dotnet-install.ps1"
+                    Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer
+                    & $installer -Runtime dotnet -Channel 8.0 -Architecture x86 `
+                        -InstallDir (Join-Path ${env:ProgramFiles(x86)} "dotnet")
+                }
+            }
+            else {
+                Write-Warning "Skipping 'dotnet test (net8.0, x86, hooks)': no x86 .NET 8 runtime under '$x86Runtime'."
+            }
+        }
+
+        if (Test-Path (Join-Path $x86Runtime "8.*")) {
+            Invoke-Step "dotnet test (net8.0, x86, hooks)" {
+                $env:SCRY_EXPECT_BITNESS = "x86"
+                try {
+                    dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net8.0 --no-build --nologo `
+                        --filter "FullyQualifiedName~HookOperationTests" `
+                        -- RunConfiguration.TargetPlatform=x86
+                }
+                finally {
+                    Remove-Item Env:SCRY_EXPECT_BITNESS -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+
     Invoke-Step "dotnet test Scry.Wpf.Tests (net462)" {
         dotnet test tests\Scry.Wpf.Tests\Scry.Wpf.Tests.csproj -c Release -f net462 @versionArgs --nologo
     }

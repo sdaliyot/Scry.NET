@@ -53,6 +53,12 @@ public sealed class EndpointOptions
 
     public int MaximumJobLogMessageLength { get; init; } = 4096;
 
+    /// <summary>Hooks that can exist at once across all sessions of this endpoint.</summary>
+    public int MaximumHooks { get; init; } = 256;
+
+    /// <summary>Upper bound on the per-hook call buffer a client may request.</summary>
+    public int MaximumHookCapacity { get; init; } = 10_000;
+
     /// <summary>
     /// Whether to write the rolling audit file under <c>%LOCALAPPDATA%\Scry\audit</c>. On by
     /// default, deliberately: attach mode cannot be configured by the target application (it does
@@ -401,6 +407,8 @@ public sealed class EndpointHost : IAsyncDisposable, IDisposable
                 MaximumJobs = selected.MaximumJobs,
                 MaximumJobLogEntries = selected.MaximumJobLogEntries,
                 MaximumJobLogMessageLength = selected.MaximumJobLogMessageLength,
+                MaximumHooks = selected.MaximumHooks,
+                MaximumHookCapacity = selected.MaximumHookCapacity,
                 AuditEnabled = selected.AuditEnabled,
                 AuditDirectory = selected.AuditDirectory,
                 AuditCallback = selected.AuditCallback,

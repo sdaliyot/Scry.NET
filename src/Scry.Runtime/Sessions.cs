@@ -90,6 +90,13 @@ internal sealed class SessionManager : IDisposable
         return session;
     }
 
+    /// <summary>
+    /// Raised with the session id once a session has been disposed - on disconnect of an ephemeral
+    /// session, on lease expiry, or at shutdown - so state owned by a session but kept outside it
+    /// (a method hook's patch) does not outlive it. Must not throw.
+    /// </summary>
+    public Action<string>? SessionDisposed { get; set; }
+
     public void Remove(string id)
     {
         if (_sessions.TryGetValue(id, out var existing) &&
@@ -97,6 +104,7 @@ internal sealed class SessionManager : IDisposable
             _sessions.TryRemove(id, out var session))
         {
             session.Dispose();
+            NotifyDisposed(session.Id);
         }
     }
 
@@ -109,7 +117,20 @@ internal sealed class SessionManager : IDisposable
                 _sessions.TryRemove(pair.Key, out var removed))
             {
                 removed.Dispose();
+                NotifyDisposed(removed.Id);
             }
+        }
+    }
+
+    private void NotifyDisposed(string sessionId)
+    {
+        try
+        {
+            SessionDisposed?.Invoke(sessionId);
+        }
+        catch
+        {
+            // A cleanup callback must never break session expiry, which runs on a timer thread.
         }
     }
 
@@ -121,6 +142,7 @@ internal sealed class SessionManager : IDisposable
             if (!session.IsInUse)
             {
                 session.Dispose();
+                NotifyDisposed(session.Id);
             }
 
             // Sessions with an in-flight operation (e.g. a job whose background task outlived the

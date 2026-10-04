@@ -1,9 +1,10 @@
 # Third-party notices
 
 Scry.NET is distributed under the MIT license (see [`LICENSE`](LICENSE)) and directly references
-the packages below. All are published by Microsoft or the .NET Foundation and are themselves
-MIT-licensed; the single license text that applies to every one of them is reproduced once at the
-end of this file rather than five times over.
+the packages below. All but `Lib.Harmony` are published by Microsoft or the .NET Foundation and are
+themselves MIT-licensed; the single license text that applies to every one of them is reproduced
+once at the end of this file rather than once per package. `Lib.Harmony` is also MIT-licensed but
+under its own copyright holder, so its notice is reproduced separately below the table.
 
 | Package | Version | Used by |
 |---|---|---|
@@ -12,6 +13,15 @@ end of this file rather than five times over.
 | [`Microsoft.Bcl.AsyncInterfaces`](https://github.com/dotnet/runtime) | 9.0.11 | Every project targeting .NET Framework - backfills `IAsyncEnumerable`/`IAsyncDisposable` support. |
 | [`System.Threading.Tasks.Extensions`](https://github.com/dotnet/runtime) | 4.5.4 | Every project targeting .NET Framework - backfills `ValueTask`/`ValueTask<T>`. |
 | [`Microsoft.NETFramework.ReferenceAssemblies.net462`](https://github.com/dotnet/sdk) | 1.0.3 | Every net462 build - makes SDK-style net462 builds reproducible without a machine-installed targeting pack; contributes no runtime code. |
+| [`Lib.Harmony`](https://github.com/pardeike/Harmony) | 2.4.2 | `Scry.Runtime` - the runtime patching library behind the `hook.*` operations (method hooks). Staged as `0Harmony.dll` and loaded only when the first hook is added. |
+
+**Lib.Harmony.** Copyright (c) 2017 Andreas Pardeike, MIT License (the text is the one at the end
+of this file, with that copyright line). The `Lib.Harmony` package ships Harmony with its
+dependencies merged into the single `0Harmony.dll`, including `MonoMod.Core` by 0x0ade and
+nike4613 (credited in the package's README). That merged code is MIT-licensed upstream at
+[github.com/MonoMod/MonoMod](https://github.com/MonoMod/MonoMod); the `Lib.Harmony` package does not
+itself include MonoMod's license text, so consult that repository for it. Scry.NET stages the merged
+package rather than `Lib.Harmony.Thin` on purpose - same code, but a chain of separate DLLs.
 
 **What this list does not attempt to enumerate.** `Microsoft.CodeAnalysis.CSharp.Scripting` pulls
 in further Microsoft/.NET Foundation packages of its own (the rest of the Roslyn compiler platform,
@@ -29,7 +39,8 @@ the two ever disagree.
 
 ## MIT License
 
-The license below applies to every package listed above.
+The license below applies to every package listed above; for `Lib.Harmony` the copyright line is
+"Copyright (c) 2017 Andreas Pardeike", as stated above.
 
 ```
 MIT License

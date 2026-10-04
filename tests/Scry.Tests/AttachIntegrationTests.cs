@@ -783,7 +783,7 @@ public sealed class AttachIntegrationTests
         }
     }
 
-    private static async Task<CliResult> RunCliAsync(
+    internal static async Task<CliResult> RunCliAsync(
         string cliAssembly,
         string arguments,
         string? input,
@@ -813,7 +813,7 @@ public sealed class AttachIntegrationTests
         return new(process.ExitCode, await standardOutput, await standardError);
     }
 
-    private static string FindRepositoryRoot()
+    internal static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Scry.sln")))
@@ -825,7 +825,7 @@ public sealed class AttachIntegrationTests
             ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 
-    private sealed record CliResult(
+    internal sealed record CliResult(
         int ExitCode,
         string StandardOutput,
         string StandardError);

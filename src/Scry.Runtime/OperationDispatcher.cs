@@ -554,7 +554,7 @@ internal sealed class OperationDispatcher(
         throw new ScryOperationException("member_not_found", $"Writable member '{name}' was not found.");
     }
 
-    private RemoteValue Encode(
+    internal static RemoteValue Encode(
         object? value,
         SessionState session,
         bool leaseValueType = false)
@@ -562,7 +562,7 @@ internal sealed class OperationDispatcher(
         return Encode(value, session, leaseValueType, out _);
     }
 
-    private RemoteValue Encode(
+    internal static RemoteValue Encode(
         object? value,
         SessionState session,
         bool leaseValueType,
