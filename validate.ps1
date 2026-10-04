@@ -110,7 +110,15 @@ try {
 
         if (Test-Path (Join-Path $x86Runtime "8.*")) {
             Invoke-Step "dotnet test (net8.0, x86, hooks)" {
+                # Point the x86 test host at the x86 install explicitly. GitHub's runners export
+                # DOTNET_ROOT as the x64 install, and the x86 host lookup then fails with "Could not
+                # find 'dotnet.exe' host for the 'X86' architecture" even though the x86 install is
+                # present at its default location (confirmed on a runner: with these two variables
+                # set, or DOTNET_ROOT cleared, the same command passes; without, it aborts).
+                $x86Root = Join-Path ${env:ProgramFiles(x86)} "dotnet"
                 $env:SCRY_EXPECT_BITNESS = "x86"
+                $env:DOTNET_ROOT_X86 = $x86Root
+                [Environment]::SetEnvironmentVariable("DOTNET_ROOT(x86)", $x86Root)
                 try {
                     dotnet test tests\Scry.Tests\Scry.Tests.csproj -c Release -f net8.0 --no-build --nologo `
                         --filter "FullyQualifiedName~HookOperationTests" `
@@ -118,6 +126,8 @@ try {
                 }
                 finally {
                     Remove-Item Env:SCRY_EXPECT_BITNESS -ErrorAction SilentlyContinue
+                    Remove-Item Env:DOTNET_ROOT_X86 -ErrorAction SilentlyContinue
+                    [Environment]::SetEnvironmentVariable("DOTNET_ROOT(x86)", $null)
                 }
             }
         }
