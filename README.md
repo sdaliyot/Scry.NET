@@ -5,11 +5,13 @@
 **A must-have tool for .NET development in the AI era!**
 
 **Scry.NET gives your .NET application what the DevTools protocol gives a web or Node.js app:
-a live, external handle on a process that is already running - built for the two things people
-actually need one for. AI agents that must check their own work against the real application
-rather than reason about what a change probably did, through the
-[agent Skill](skills/scry/SKILL.md) that ships with it. And automated tests that need to reach
-past the UI into the state behind it.**
+a live, external handle on a process that is already running. Through it you can examine and change
+the application's state, drive its UI, hook its methods to see what they were called with and what
+they returned, and more. That opens up several uses. AI agents can check their own work against the
+real application, through the [agent Skill](skills/scry/SKILL.md) that ships with it, rather than
+reason about what a change probably did. Automated tests can reach past the UI into the state
+behind it. And a process stuck in a bad state can be examined while the problem is happening, to
+pinpoint the cause, rather than restarted in the hope of catching it next time.**
 
 <br clear="left"/>
 
@@ -183,13 +185,12 @@ There are two primary ways to get started with Scry.NET:
 
 The `scry` CLI lets AI agents and developers inspect, mutate, and attach to running .NET applications.
 
-1. **Install the Skill in your AI agent**:
-   - **Claude Code**: Install the Skill directly:
-     ```text
-     /plugin marketplace add sdaliyot/Scry.NET
-     /plugin install scry@scry-plugins
-     ```
-   - **GitHub Copilot, OpenAI Codex, Cursor, etc.**: Paste the contents of [`skills/scry/SKILL.md`](skills/scry/SKILL.md) into your agent's instructions (e.g. `AGENTS.md`, `.cursorrules`, or custom agent instructions).
+1. **Install the Skill in your AI agent**: Claude Code, GitHub Copilot, OpenAI Codex, Cursor and
+   other agents can all install it themselves. Prompt the agent with:
+
+   > *"Globally install or update the SKILL from: https://github.com/sdaliyot/Scry.NET/blob/main/skills/scry/SKILL.md"*
+
+   Send the same prompt again later to update to the latest version of the Skill.
 
    There is nothing to download or configure by hand first: the Skill's `Resolve-ScryCli` function
    downloads the matching self-contained `scry.exe` from the [latest release](https://github.com/sdaliyot/Scry.NET/releases/latest)
