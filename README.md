@@ -689,6 +689,12 @@ a lease taken by one call is gone by the next. A TCP listener plus a port forwar
 CLI (or your test) runs entirely on the local machine and talks through the forward as if the
 target were local.
 
+The four steps below are what the setup actually consists of; read them once, because they are what
+goes wrong. If you would rather not do them by hand, the agent Skill ships a `Connect-ScryRemote`
+function that performs exactly this sequence and a `Disconnect-ScryRemote` that removes exactly what
+it added - see
+["Automating the setup"](skills/scry/SKILL.md#automating-the-setup-connect-scryremote).
+
 1. **On the target machine**, get an endpoint running with a TCP listener enabled - by either of the
    [two hosting modes](#two-ways-to-get-an-endpoint-into-a-process).
 

@@ -1084,6 +1084,585 @@ capability token in the descriptor is the only gate). Treat a remote descriptor 
 as a local one - never copy it into logs, chat, or source control - and delete it once the task is
 done, since it is a bearer credential for the remote endpoint's whole lifetime.
 
+### Automating the setup: `Connect-ScryRemote`
+
+The setup above is mechanical and easy to get wrong by hand. `Connect-ScryRemote` below performs
+exactly the documented steps - nothing else - and `Disconnect-ScryRemote` removes exactly what it
+added. **Use these functions rather than improvising the steps**, so that what runs on the user's
+machines is this reviewed sequence rather than ad-hoc commands.
+
+**Before calling `Connect-ScryRemote`, ask the user for what you do not already know**, in one
+question, and do not guess:
+
+- the remote computer name
+- the process (a pid, or a name - the function lists the candidates with their pid, bitness, owning
+  user, service or app-pool name and full command line if a name is ambiguous, so the user can pick)
+- the adapters (`wpf`/`winforms`) and the AppDomain, if the target needs either. **For IIS - a
+  `w3wp` process, or anything the user describes as an IIS or ASP.NET application - use
+  `--appdomain auto`**, which `Connect-ScryRemote` applies by itself for `w3wp`. The application's
+  own code lives in a non-default AppDomain, so a plain attach reaches nothing useful. `auto` is
+  safe where an explicit selector is not: it resolves to the single non-default domain or else the
+  default one, never to a guess among several, and modern .NET ignores it. If the pool hosts
+  several applications it lands in the default domain, and `appdomain.list` then
+  `appdomain.start` reaches the right one from there - no second injection needed, and the process
+  only ever gets one.
+- whether to use the current Windows identity or prompt for a credential
+
+Then state plainly what the run will do, and get an explicit "yes" before the first call:
+
+> This attaches Scry to `<process>` on `<computer>` (injecting into that process), forwards its
+> loopback port here, and needs local administrator rights for the port forward. If the connection
+> does not come up without one, it also adds an inbound firewall rule on `<computer>` for that one
+> port, restricted to this machine's address. `Disconnect-ScryRemote` removes the forwards, the
+> rule and the local descriptor afterwards.
+
+The user must have administrative rights on the target machine and be authorized to attach to that
+process. This is the same authorization rule as every other use of Scry - it is not loosened by
+being remote.
+
+#### Running these functions
+
+**Install them once, do not re-transcribe them every session.** Check
+`%LOCALAPPDATA%\Scry.NET\ScryRemote.ps1`: if it is missing, or its first line is not
+`# ScryRemote 1`, write the code block below to that path verbatim. Then dot-source it:
+
+```powershell
+. "$env:LOCALAPPDATA\Scry.NET\ScryRemote.ps1"
+```
+
+Copying several hundred lines into a scratch file on every run costs two tool calls and risks a
+silent transcription error. Writing it once, keyed on that version line, costs nothing after the
+first time.
+
+**Never try to drive `Get-Credential` yourself.** It needs a live interactive prompt, which an
+agent's shell does not have: running it through a terminal-handoff tool typically leaves the
+command sitting unexecuted and then cancels it, so the dialog appears and dies. There are two
+supported routes, in this order:
+
+1. **A saved credential.** Ask the user to run this once, in their own terminal, for the target
+   machine. `Connect-ScryRemote` then finds it automatically and nothing is interactive afterwards:
+
+   ```powershell
+   Save-ScryRemoteCredential -ComputerName <computer>
+   ```
+
+   It is stored with `Export-Clixml`, so the password is DPAPI-protected and readable only by that
+   Windows account on that machine. It is still a reusable secret: tell the user it exists and that
+   `Remove-ScryRemoteCredential -ComputerName <computer>` deletes it.
+
+2. **A one-off handoff**, when the user would rather not save anything. Write a small driver script
+   that calls `Get-Credential` and then `Connect-ScryRemote`, give the user the single command that
+   runs it, and wait. Do not try to execute it for them. When they say it is done, read
+   `%LOCALAPPDATA%\Scry.NET\remote\<id>\connection.json` for the result rather than scraping their
+   terminal.
+
+The current Windows identity is used when neither applies, which is the normal case for a
+domain-joined target reached by name. A bare IP address or a workgroup machine almost always needs
+one of the two routes above.
+
+```powershell
+# ScryRemote 1
+
+function Connect-ScryRemote {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        # A pid, or a process name. A name matching several processes stops with the candidates
+        # listed - ask the user which one rather than picking.
+        [Parameter(Mandatory)][string]$Process,
+        [ValidateSet("wpf", "winforms")][string[]]$Adapters,
+        # Defaults to "auto" for an IIS worker - see the note where it is applied below.
+        [string]$AppDomain,
+        # Omit to use a credential saved by Save-ScryRemoteCredential, or failing that the caller's
+        # own Windows identity. Never collect a password yourself and never put one in a script.
+        [pscredential]$Credential,
+        [int]$LocalPort = 0,
+        # Only used if the firewall fallback below turns out to be needed.
+        [string]$ClientAddress,
+        [ValidateSet("auto", "ssh", "netsh")][string]$Transport = "auto",
+        [string]$RemoteTargetsDir = "C:\ScryRendezvous"
+    )
+
+    $ErrorActionPreference = "Stop"
+
+    # A credential saved earlier for this machine beats prompting, because an agent cannot prompt.
+    if (-not $Credential) { $Credential = Get-ScryRemoteCredential -ComputerName $ComputerName }
+
+    # Preflight WinRM before anything else runs. A bare IP or a workgroup host usually needs both
+    # an explicit credential and a TrustedHosts entry, and saying which is missing beats letting
+    # New-PSSession fail thirty seconds later with a generic message.
+    $wsman = @{ ComputerName = $ComputerName; ErrorAction = "SilentlyContinue" }
+    if ($Credential) { $wsman.Credential = $Credential; $wsman.Authentication = "Negotiate" }
+    if (-not (Test-WSMan @wsman)) {
+        $hint = ""
+        if (-not $Credential) {
+            $hint = (" No credential was supplied or saved - if this is a bare IP or a workgroup " +
+                     "machine, ask the user to run " +
+                     "'Save-ScryRemoteCredential -ComputerName $ComputerName' in their own terminal.")
+        }
+        throw ("WinRM did not answer on $ComputerName. Check that the service is running there, " +
+               "and that this machine trusts it (Get-Item WSMan:\localhost\Client\TrustedHosts)." +
+               " Scry never changes WinRM configuration itself - ask the user to do it.$hint")
+    }
+
+    $sessionArgs = @{ ComputerName = $ComputerName }
+    if ($Credential) { $sessionArgs.Credential = $Credential }
+    $session = New-PSSession @sessionArgs
+    # Every key exists from the start, and each is filled the moment the thing it describes is
+    # created - never at the end. A connect that dies half way must still hand the cleanup path a
+    # complete picture of what it made, or it leaks (a stranded descriptor is a stranded bearer
+    # credential).
+    $state = [ordered]@{
+        Id = $null; Computer = $ComputerName; CreatedAt = (Get-Date -Format "o"); StateDir = $null
+        RemoteProxy = $null; LocalProxy = $null; FirewallRule = $null; SshProcessId = $null
+    }
+
+    try {
+        # 1. Identify the process and its bitness. Bitness decides which scry.exe can attach at
+        #    all - an x64 injector cannot touch an x86 target, and vice versa.
+        $candidates = @(Invoke-Command -Session $session -ArgumentList $Process -ScriptBlock {
+            param($spec)
+            $signature = @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool IsWow64Process(System.IntPtr hProcess, out bool wow64Process);
+'@
+            $kernel32 = Add-Type -MemberDefinition $signature -Name ScryKernel32 `
+                -Namespace ScryRemoteSetup -PassThru
+            $found = if ($spec -match '^\d+$') {
+                @(Get-Process -Id ([int]$spec) -ErrorAction SilentlyContinue)
+            } else {
+                @(Get-Process -Name ($spec -replace '\.exe$', '') -ErrorAction SilentlyContinue)
+            }
+
+            $byPid = @{}
+            Get-CimInstance Win32_Process | ForEach-Object { $byPid[[int]$_.ProcessId] = $_ }
+            $services = @{}
+            Get-CimInstance Win32_Service | Where-Object { $_.ProcessId } |
+                ForEach-Object { $services[[int]$_.ProcessId] = $_.Name }
+
+            foreach ($item in $found) {
+                # On a 64-bit OS, "not running under WOW64" means a 64-bit process.
+                $isWow64 = $false
+                try { [void]$kernel32::IsWow64Process($item.Handle, [ref]$isWow64) } catch { }
+                $info = $byPid[[int]$item.Id]
+                $owner = $null
+                if ($info) {
+                    try { $owner = (Invoke-CimMethod -InputObject $info -MethodName GetOwner).User }
+                    catch { }
+                }
+                $commandLine = $null
+                if ($info) { $commandLine = $info.CommandLine }
+                [pscustomobject]@{
+                    Id = $item.Id
+                    Name = $item.ProcessName
+                    Bitness = $(if ($isWow64) { "x86" } else { "x64" })
+                    User = $owner
+                    Service = $services[[int]$item.Id]
+                    CommandLine = $commandLine
+                }
+            }
+        })
+
+        if ($candidates.Count -eq 0) {
+            throw "No process matching '$Process' on $ComputerName."
+        }
+        if ($candidates.Count -gt 1) {
+            # The command line is what actually tells two w3wp.exe or two service hosts apart -
+            # an IIS worker carries its pool as `-ap "<pool>"`.
+            $listing = ($candidates | ForEach-Object {
+                "  pid $($_.Id)  $($_.Bitness)  user=$($_.User)  service=$($_.Service)`n" +
+                "      $($_.CommandLine)"
+            }) -join "`n"
+            throw ("'$Process' matches $($candidates.Count) processes on $ComputerName. " +
+                   "Ask the user which pid to attach to:`n$listing")
+        }
+
+        $target = $candidates[0]
+        $architecture = $target.Bitness
+
+        # An IIS application's own code does not run in the process's default AppDomain, so a plain
+        # attach to w3wp lands somewhere that can confirm the process is alive and nothing else.
+        # "auto" takes the single non-default domain when there is exactly one - the ordinary
+        # one-application pool - and otherwise the default domain, which is just a plain attach. It
+        # is never a guess among several, so it cannot land somewhere the caller did not ask for,
+        # and it is ignored outright on modern .NET (an in-process ASP.NET Core worker is also
+        # w3wp.exe). That makes it strictly better than omitting it here.
+        if (-not $AppDomain -and $target.Name -eq "w3wp") {
+            $AppDomain = "auto"
+            Write-Host "IIS worker: attaching with --appdomain auto."
+        }
+
+        # 2. Make sure a matching scry.exe exists on the remote machine. Copy this machine's own
+        #    install over the session rather than having the target download anything.
+        $remoteExe = Invoke-Command -Session $session -ArgumentList $architecture -ScriptBlock {
+            param($arch)
+            $name = if ($arch -eq "x86") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
+            foreach ($scope in 'Process', 'User', 'Machine') {
+                $dir = [Environment]::GetEnvironmentVariable($name, $scope)
+                if (![string]::IsNullOrWhiteSpace($dir)) {
+                    $candidate = Join-Path $dir "scry.exe"
+                    if (Test-Path $candidate) { return $candidate }
+                }
+            }
+            return $null
+        }
+
+        if (-not $remoteExe) {
+            $localExe = Resolve-ScryCli -Architecture $architecture
+            $localDir = Split-Path $localExe -Parent
+            $remoteDir = Invoke-Command -Session $session -ArgumentList $architecture -ScriptBlock {
+                param($arch)
+                $dir = Join-Path $env:LOCALAPPDATA "Scry.NET\$arch"
+                New-Item -ItemType Directory -Force -Path $dir | Out-Null
+                return $dir
+            }
+            Write-Host "Copying scry ($architecture) to $ComputerName`:$remoteDir"
+            Copy-Item -Path (Join-Path $localDir "*") -Destination $remoteDir `
+                -ToSession $session -Recurse -Force
+            $remoteExe = Invoke-Command -Session $session -ArgumentList $architecture, $remoteDir `
+                -ScriptBlock {
+                    param($arch, $dir)
+                    $name = if ($arch -eq "x86") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
+                    [Environment]::SetEnvironmentVariable($name, $dir, 'User')
+                    return (Join-Path $dir "scry.exe")
+                }
+        }
+
+        # 3. Attach on the remote machine. --tcp-port 0 is mandatory for a forward to exist at all,
+        #    and --targets-dir keeps the descriptor somewhere both identities can reach.
+        $adapterArgument = $null
+        if ($Adapters) { $adapterArgument = ($Adapters -join ",") }
+        $attach = Invoke-Command -Session $session -ScriptBlock {
+            param($exe, $targetPid, $dir, $adapters, $domain)
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            $arguments = @("attach", "$targetPid", "--tcp-port", "0", "--targets-dir", $dir)
+            if ($adapters) { $arguments += @("--adapters", $adapters) }
+            if ($domain) { $arguments += @("--appdomain", $domain) }
+            $output = (& $exe @arguments 2>&1 | Out-String)
+
+            # An endpoint already in the process is a reusable result, not a failure: a process
+            # gets exactly one injection for its lifetime, and there is no detach.
+            if ($output -notmatch '"success"\s*:\s*true') {
+                $existing = (& $exe discover --targets-dir $dir 2>&1 | Out-String)
+                return [pscustomobject]@{ Attach = $output; Discover = $existing }
+            }
+            return [pscustomobject]@{ Attach = $output; Discover = $null }
+        } -ArgumentList $remoteExe, $target.Id, $RemoteTargetsDir, $adapterArgument, $AppDomain
+
+        $descriptorPathRemote = $null
+        $remotePort = $null
+        $attachResult = $null
+        try { $attachResult = $attach.Attach | ConvertFrom-Json } catch { }
+
+        if ($attachResult -and $attachResult.success) {
+            $descriptorPathRemote = $attachResult.descriptorPath
+            $remotePort = $attachResult.tcpPort
+        } elseif ($attach.Discover) {
+            $discovered = $null
+            try { $discovered = $attach.Discover | ConvertFrom-Json } catch { }
+            $match = $null
+            if ($discovered) {
+                $match = $discovered.targets |
+                    Where-Object { $_.target.processId -eq $target.Id } | Select-Object -First 1
+            }
+            if (-not $match) { throw "Attach failed on $ComputerName`: $($attach.Attach)" }
+            if (-not $match.tcpPort) {
+                throw ("Process $($target.Id) already hosts a Scry endpoint with no TCP listener, " +
+                       "so it cannot be reached from this machine. The process has to be " +
+                       "restarted and re-attached with --tcp-port 0.")
+            }
+            Write-Host "Reusing the endpoint already attached to pid $($target.Id)."
+            $descriptorPathRemote = $match.descriptorPath
+            $remotePort = $match.tcpPort
+        } else {
+            throw "Attach failed on $ComputerName`: $($attach.Attach)"
+        }
+
+        # 4. Bring the descriptor here, over the session. It is a bearer credential, so it travels
+        #    only on this channel, is written outside the local targets directory, and is never
+        #    printed.
+        $connectionId = [guid]::NewGuid().ToString("n").Substring(0, 12)
+        $stateDir = Join-Path $env:LOCALAPPDATA "Scry.NET\remote\$connectionId"
+        New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+        $state.Id = $connectionId
+        $state.StateDir = $stateDir
+        $descriptorPath = Join-Path $stateDir "descriptor.json"
+        $descriptorJson = Invoke-Command -Session $session -ArgumentList $descriptorPathRemote `
+            -ScriptBlock { param($path) Get-Content -LiteralPath $path -Raw }
+        Set-Content -LiteralPath $descriptorPath -Value $descriptorJson -Encoding utf8
+
+        if ($LocalPort -le 0) {
+            $listener = New-Object System.Net.Sockets.TcpListener(
+                [System.Net.IPAddress]::Loopback, 0)
+            $listener.Start()
+            $LocalPort = $listener.LocalEndpoint.Port
+            $listener.Stop()
+        }
+
+        $targetIp = ([System.Net.Dns]::GetHostAddresses($ComputerName) |
+            Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1).ToString()
+
+        # 5. Stand up the forward. SSH is preferred when it is there: it carries the token inside
+        #    an encrypted tunnel, and it needs no administrator rights or firewall changes.
+        $useSsh = $false
+        if ($Transport -ne "netsh") {
+            $useSsh = $null -ne (Get-Command ssh -ErrorAction SilentlyContinue) -and
+                (Test-NetConnection -ComputerName $ComputerName -Port 22 `
+                    -InformationLevel Quiet -WarningAction SilentlyContinue)
+            if ($Transport -eq "ssh" -and -not $useSsh) {
+                throw "-Transport ssh was requested but port 22 on $ComputerName is not reachable."
+            }
+        }
+
+        if ($useSsh) {
+            $sshUser = $env:USERNAME
+            if ($Credential) { $sshUser = $Credential.UserName }
+            $tunnel = Start-Process ssh -PassThru -WindowStyle Hidden -ArgumentList @(
+                "-N", "-L", "${LocalPort}:127.0.0.1:$remotePort", "$sshUser@$ComputerName")
+            $state.SshProcessId = $tunnel.Id
+            $transportUsed = "ssh"
+        } else {
+            $isAdmin = ([Security.Principal.WindowsPrincipal] `
+                [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+                    [Security.Principal.WindowsBuiltInRole]::Administrator)
+            if (-not $isAdmin) {
+                throw ("The netsh port forward needs local administrator rights. Re-run this from " +
+                       "an elevated session, or enable OpenSSH Server on $ComputerName to use the " +
+                       "ssh transport instead.")
+            }
+
+            Invoke-Command -Session $session -ArgumentList $targetIp, $remotePort -ScriptBlock {
+                param($ip, $port)
+                netsh interface portproxy add v4tov4 listenaddress=$ip listenport=$port `
+                    connectaddress=127.0.0.1 connectport=$port | Out-Null
+            }
+            $state.RemoteProxy = @{ Address = $targetIp; Port = $remotePort }
+
+            netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=$LocalPort `
+                connectaddress=$targetIp connectport=$remotePort | Out-Null
+            $state.LocalProxy = @{ Address = "127.0.0.1"; Port = $LocalPort }
+            $transportUsed = "netsh"
+        }
+
+        # 6. Prove the path end to end. The firewall rule is added only if this fails - most
+        #    networks do not need one, and an unnecessary rule is an unnecessary opening.
+        # `capabilities` is the cheapest proof of a working link: it completes a full handshake
+        # (so the token and the forward are both good) and runs nothing inside the target.
+        $localExe = Resolve-ScryCli -Architecture x64
+        function Test-ScryRemoteLink {
+            # A failed probe writes to stderr, which Windows PowerShell turns into a terminating
+            # NativeCommandError while $ErrorActionPreference is Stop. A failed probe is an
+            # expected outcome here, so let it come back as text.
+            $previous = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $probe = (& $localExe capabilities --descriptor $descriptorPath `
+                    --address "127.0.0.1:$LocalPort" 2>&1 | Out-String)
+            } finally { $ErrorActionPreference = $previous }
+            return ($probe -match '"success"\s*:\s*true')
+        }
+
+        if (-not (Test-ScryRemoteLink)) {
+            if ($transportUsed -eq "netsh") {
+                if (-not $ClientAddress) {
+                    $ClientAddress = (Find-NetRoute -RemoteIPAddress $targetIp `
+                        -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+                }
+                if ($ClientAddress) {
+                    $ruleName = "Scry remote $connectionId"
+                    Write-Host "Connection did not come up; adding a scoped firewall rule."
+                    Invoke-Command -Session $session -ScriptBlock {
+                        param($name, $port, $client)
+                        New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Allow `
+                            -Protocol TCP -LocalPort $port -RemoteAddress $client | Out-Null
+                    } -ArgumentList $ruleName, $remotePort, $ClientAddress
+                    $state.FirewallRule = $ruleName
+                }
+            }
+
+            if (-not (Test-ScryRemoteLink)) {
+                Disconnect-ScryRemote -Connection ([pscustomobject]$state) -Session $session
+                $reachable = Test-NetConnection -ComputerName $targetIp -Port $remotePort `
+                    -InformationLevel Quiet -WarningAction SilentlyContinue
+                throw ("Could not reach the endpoint. Remote listener port: $remotePort; " +
+                       "transport: $transportUsed; $targetIp`:$remotePort reachable: $reachable. " +
+                       "Everything this function added has been removed.")
+            }
+        }
+
+        $state.ProcessId = $target.Id
+        $state.Bitness = $architecture
+        $state.LocalPort = $LocalPort
+        $state.RemotePort = $remotePort
+        $state.DescriptorPath = $descriptorPath
+        $state.Transport = $transportUsed
+        $statePath = Join-Path $stateDir "connection.json"
+        ($state | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $statePath -Encoding utf8
+
+        Remove-PSSession $session
+        Write-Host ("Connected: pid $($target.Id) ($architecture) on $ComputerName via " +
+                    "$transportUsed. Use --descriptor `"$descriptorPath`" --address 127.0.0.1:$LocalPort")
+        return [pscustomobject]$state
+    } catch {
+        if ($session) {
+            try { Disconnect-ScryRemote -Connection ([pscustomobject]$state) -Session $session }
+            catch { }
+            Remove-PSSession $session -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+}
+
+function Disconnect-ScryRemote {
+    [CmdletBinding()]
+    param(
+        # The object Connect-ScryRemote returned, or its connection.json.
+        [Parameter(Mandatory)]$Connection,
+        # Internal: reuses the open session during a failed connect.
+        $Session
+    )
+
+    if ($Connection -is [string]) { $Connection = Get-Content $Connection -Raw | ConvertFrom-Json }
+
+    # The endpoint itself stays: a process gets exactly one injection for its lifetime and Scry
+    # has no detach. This removes the reachability and the credential, not the endpoint.
+    $ownsSession = $false
+    if (-not $Session -and ($Connection.RemoteProxy -or $Connection.FirewallRule)) {
+        $Session = New-PSSession -ComputerName $Connection.Computer
+        $ownsSession = $true
+    }
+
+    $removed = @()
+    if ($Connection.SshProcessId) {
+        Stop-Process -Id $Connection.SshProcessId -Force -ErrorAction SilentlyContinue
+        $removed += "ssh tunnel"
+    }
+    if ($Connection.LocalProxy) {
+        netsh interface portproxy delete v4tov4 `
+            listenaddress=$($Connection.LocalProxy.Address) `
+            listenport=$($Connection.LocalProxy.Port) | Out-Null
+        $removed += "local port forward"
+    }
+    if ($Connection.RemoteProxy) {
+        Invoke-Command -Session $Session -ArgumentList $Connection.RemoteProxy -ScriptBlock {
+            param($proxy)
+            netsh interface portproxy delete v4tov4 listenaddress=$($proxy.Address) `
+                listenport=$($proxy.Port) | Out-Null
+        }
+        $removed += "remote port forward"
+    }
+    if ($Connection.FirewallRule) {
+        Invoke-Command -Session $Session -ArgumentList $Connection.FirewallRule -ScriptBlock {
+            param($name) Remove-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
+        }
+        $removed += "firewall rule"
+    }
+    if ($Connection.StateDir -and (Test-Path $Connection.StateDir)) {
+        Remove-Item $Connection.StateDir -Recurse -Force -ErrorAction SilentlyContinue
+        $removed += "descriptor"
+    }
+    if ($ownsSession -and $Session) { Remove-PSSession $Session -ErrorAction SilentlyContinue }
+    if ($removed.Count -gt 0) { Write-Host "Removed: $($removed -join ', ')." }
+}
+
+function Get-ScryRemoteConnection {
+    [CmdletBinding()]
+    param()
+
+    # Forwards and descriptors outlive the session that created them: a session that ends without
+    # calling Disconnect-ScryRemote leaves both in place. Start here rather than assuming a clean
+    # slate, and offer to disconnect anything stale.
+    $root = Join-Path $env:LOCALAPPDATA "Scry.NET\remote"
+    if (-not (Test-Path $root)) { return }
+
+    foreach ($dir in Get-ChildItem $root -Directory) {
+        $statePath = Join-Path $dir.FullName "connection.json"
+        if (Test-Path $statePath) {
+            $connection = Get-Content $statePath -Raw | ConvertFrom-Json
+            $connection | Add-Member -NotePropertyName Tracked -NotePropertyValue $true -Force
+            $connection
+        } else {
+            # A connect that died before writing its state file. Whatever forwards it made are no
+            # longer described anywhere, but the descriptor it left behind is still a bearer
+            # credential - so surface it as something to remove.
+            [pscustomobject]@{
+                Id = $dir.Name; Computer = $null; StateDir = $dir.FullName; Tracked = $false
+            }
+        }
+    }
+}
+
+function Get-ScryRemoteCredentialPath {
+    param([Parameter(Mandatory)][string]$ComputerName)
+    $safe = ($ComputerName.ToLowerInvariant() -replace '[^a-z0-9._-]', '_')
+    return (Join-Path $env:LOCALAPPDATA "Scry.NET\remote-credentials\$safe.xml")
+}
+
+function Save-ScryRemoteCredential {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ComputerName)
+
+    # The user runs this themselves. Get-Credential needs a live prompt, which an agent shell does
+    # not have. Export-Clixml protects the password with DPAPI, so the file can only be read back
+    # by this Windows account on this machine - it is not portable and not plaintext. It is still a
+    # reusable secret: Remove-ScryRemoteCredential deletes it.
+    $path = Get-ScryRemoteCredentialPath -ComputerName $ComputerName
+    New-Item -ItemType Directory -Force -Path (Split-Path $path -Parent) | Out-Null
+    Get-Credential -Message "Credential for $ComputerName (WinRM)" | Export-Clixml -LiteralPath $path
+    Write-Host ("Saved a DPAPI-protected credential for $ComputerName. Delete it with " +
+                "Remove-ScryRemoteCredential -ComputerName $ComputerName.")
+}
+
+function Get-ScryRemoteCredential {
+    param([Parameter(Mandatory)][string]$ComputerName)
+    $path = Get-ScryRemoteCredentialPath -ComputerName $ComputerName
+    if (Test-Path $path) {
+        # A credential saved by another account, or copied from another machine, cannot be
+        # decrypted here. Say so rather than failing later as an authentication error.
+        try { return (Import-Clixml -LiteralPath $path) }
+        catch { Write-Warning "A saved credential for $ComputerName could not be read: $_" }
+    }
+    return $null
+}
+
+function Remove-ScryRemoteCredential {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ComputerName)
+    $path = Get-ScryRemoteCredentialPath -ComputerName $ComputerName
+    if (Test-Path $path) {
+        Remove-Item $path -Force
+        Write-Host "Removed the saved credential for $ComputerName."
+    } else {
+        Write-Host "No saved credential for $ComputerName."
+    }
+}
+```
+
+Using the result: every later command runs **locally** against the forwarded port, exactly as the
+section above describes.
+
+```powershell
+. "$env:LOCALAPPDATA\Scry.NET\ScryRemote.ps1"
+# -AppDomain defaults to "auto" for w3wp; pass a FriendlyName prefix to override it.
+$remote = Connect-ScryRemote -ComputerName APP-01 -Process w3wp
+try {
+    scry inspect --descriptor $remote.DescriptorPath `
+        --address "127.0.0.1:$($remote.LocalPort)" --request request.json
+} finally {
+    Disconnect-ScryRemote -Connection $remote
+}
+```
+
+**Before connecting, run `Get-ScryRemoteConnection`.** A session that ended without disconnecting
+leaves its port forwards up and its descriptor on disk, and neither expires. Report anything it
+returns to the user and offer to `Disconnect-ScryRemote` it. An entry with `Tracked = $false` is a
+connect that died midway: its descriptor is still a live bearer credential, so it should be removed
+even though there is nothing else to tear down.
+
+Always run `Disconnect-ScryRemote` when the task ends, including on failure - the `finally` above is
+the shape to use. It removes the port forwards, any firewall rule that was added and the local
+descriptor. Never print the descriptor's contents, and never pass its path to anything but `scry`.
+
 ## Attaching across Windows identities on the same machine
 
 A target running as a different Windows identity than the one attaching - a service account, or
@@ -1144,6 +1723,11 @@ fresh read/status query to establish the current state.
 - Never copy descriptors or capability tokens to logs, chat, telemetry, source control, or
   remote systems.
 - Never expose or bridge the named-pipe protocol over a network.
+- Setting up a remote target changes two machines: it injects into a process on the target and
+  opens a port forward. Confirm the computer, the process and the credential mode with the user
+  first, use `Connect-ScryRemote` rather than improvising the steps, and always finish with
+  `Disconnect-ScryRemote`. Never collect a password yourself - pass `(Get-Credential)` so the user
+  types it, or rely on the current Windows identity.
 - Treat non-public inspection, C# execution and method hooks as privileged debugging actions. A hook
   patches the live process and keeps captured arguments (which may be secrets) in memory until read,
   drained or removed: hook only methods you need, keep `capacity` small, and always `hooks remove`.

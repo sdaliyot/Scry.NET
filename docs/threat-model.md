@@ -207,6 +207,29 @@ now that the change has landed: a loopback TCP listener (`RuntimeHostOptions.Tcp
 a port forward the operator sets up themselves (`ssh -L`, `netsh portproxy`). See `README.md`,
 "Reaching an endpoint on another machine," for the operator-facing recipe.
 
+**Automating that setup does not widen it.** The agent Skill's `Connect-ScryRemote` runs the same
+sequence an operator would run by hand, and is deliberately narrower in three ways. The capability
+token is read over the WinRM session and written to a per-connection directory outside the local
+rendezvous directory, so it never travels over a file share and never passes through an agent's
+output. It prefers `ssh -L` when the target is reachable on port 22, which is the only one of the
+two transports that encrypts the token in transit; `netsh portproxy` is the fallback. An inbound
+firewall rule is added only if the connection fails without one, is scoped to the single port and
+the calling machine's address, and is removed again immediately if it does not fix the connection.
+`Disconnect-ScryRemote` removes the forwards, any such rule and the local descriptor - but not the
+endpoint, which cannot be detached and lives until the target process exits.
+
+**Two deliberate persistence decisions come with that automation**, both opt-in and both reversible.
+`Save-ScryRemoteCredential` writes a WinRM credential with `Export-Clixml`, which protects the
+password under DPAPI for the current user on the current machine: it is not plaintext and not
+portable to another account or host. It exists because an agent cannot answer an interactive
+`Get-Credential` prompt, and the alternative - a human-driven prompt on every connection - was the
+step most likely to be worked around badly. It is still a reusable secret at rest, so
+`Remove-ScryRemoteCredential` deletes it and the Skill requires telling the user it was created.
+Separately, a connection's descriptor stays under `%LOCALAPPDATA%\Scry.NET\remote\<id>\` until
+disconnected, and a session that simply ends does not disconnect; `Get-ScryRemoteConnection`
+enumerates what is still set up, including a connect that died before recording its own state, so
+that a stranded descriptor can be found and removed rather than lingering unnoticed.
+
 **What did not change, and was never on the table:** the endpoint itself is not reachable over a
 real network. There is no routable bind - `RuntimeHostOptions.TcpPort` binds
 `IPAddress.Loopback` only, unconditionally, with no bind-address option to configure otherwise. The
