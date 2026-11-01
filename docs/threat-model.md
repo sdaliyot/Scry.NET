@@ -66,8 +66,14 @@ moves the token-bearing descriptor out of the one location the OS already scopes
 Windows user.** The default directory, `%LOCALAPPDATA%\Scry\targets`, inherits its access control
 from the user profile it lives under - only that user (and an administrator) can read it without
 extra effort. A directory chosen to let two different identities agree on where to publish carries
-no such guarantee: it must never be a network share, a world-readable path, or a directory any
-other principal on the machine can list. This override exists for exactly one situation - attaching
+no such guarantee. The descriptor file closes most of that gap by itself: the runtime creates it
+with its own protected DACL - the writing account, Administrators and SYSTEM only, inheritance
+disabled - so the token is not exposed even when the directory around it is world-readable (the
+remote-scrying rendezvous folder, for instance, inherits `Authenticated Users` from the volume
+root). The directory choice still matters for what a file DACL cannot cover: it must never be a
+network share, which takes the token off the machine, and a directory other principals can write to
+lets them delete or pre-create the descriptor even though they cannot read or alter a published one.
+This override exists for exactly one situation - attaching
 across Windows identities on the same machine, most commonly a service account or an IIS
 application pool with no loaded user profile - and the default remains the one to prefer whenever
 both sides already agree on an identity.

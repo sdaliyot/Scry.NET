@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using Scry.Contracts;
 using Scry.Endpoint;
 using Scry.Runtime;
@@ -115,4 +118,68 @@ public sealed class TargetsDirectoryTests
         Assert.True(File.Exists(unrelated), "A file outside the descriptor naming shape must never be touched.");
         Assert.False(File.Exists(garbage), "A garbage file shaped like a descriptor is still a stale-cleanup candidate.");
     }
+
+    [Fact]
+#if !NETFRAMEWORK
+    [SupportedOSPlatform("windows")]
+#endif
+    public async Task Published_descriptor_is_not_readable_by_authenticated_users()
+    {
+        if (!IsWindows())
+        {
+            return;
+        }
+
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "scry-targets-tests",
+            Guid.NewGuid().ToString("N"));
+
+        // Reproduce the rendezvous-folder exposure: a directory whose own DACL grants Authenticated
+        // Users and lets that grant inherit onto new files. Were the descriptor written with an
+        // inherited DACL, the token would land readable by every authenticated local user.
+        Directory.CreateDirectory(directory);
+        var directoryInfo = new DirectoryInfo(directory);
+        var directorySecurity = directoryInfo.GetAccessControl();
+        directorySecurity.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        directoryInfo.SetAccessControl(directorySecurity);
+
+        await using var host = EndpointHost.Start(
+            options: new EndpointOptions
+            {
+                Alias = $"targets-dacl-test-{Guid.NewGuid():N}",
+                TargetsDirectory = directory
+            });
+
+        var security = new FileInfo(host.DescriptorPath).GetAccessControl();
+        Assert.True(
+            security.AreAccessRulesProtected,
+            "The descriptor must carry its own protected DACL, not inherit the directory's.");
+
+        var allowed = security
+            .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>()
+            .Where(rule => rule.AccessControlType == AccessControlType.Allow)
+            .Select(rule => (SecurityIdentifier)rule.IdentityReference)
+            .ToList();
+
+        Assert.DoesNotContain(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), allowed);
+        Assert.DoesNotContain(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), allowed);
+
+        Assert.Contains(WindowsIdentity.GetCurrent().User!, allowed);
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), allowed);
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), allowed);
+    }
+
+    private static bool IsWindows() =>
+#if NETFRAMEWORK
+        true;
+#else
+        OperatingSystem.IsWindows();
+#endif
 }

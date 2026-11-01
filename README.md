@@ -825,7 +825,7 @@ side computing its own default.
 scry attach <pid> --tcp-port 0 --targets-dir C:\ScryRendezvous
 ```
 
-Three things this does not do for you:
+Four things this does not do for you:
 
 - **The directory must already be writable by the target's identity.** Scry never changes
   filesystem permissions; grant access yourself, for example
@@ -839,6 +839,13 @@ Three things this does not do for you:
   identity - including this injector - can never open it. `scry attach` tries the pipe first and
   falls back to TCP automatically when the pipe is refused, but the fallback only exists when a TCP
   port was requested; without one, a cross-identity attach has no way to verify at all.
+- **The scry folder must be readable by the target's identity, too.** The native helper and the
+  payload are loaded *inside* the target, under its own account rather than yours, so running
+  `scry.exe` elevated does not help. An install under your user profile works against a LocalSystem
+  service and fails against a service running as a domain account. `scry attach` checks this before
+  writing anything into the target and refuses with `target_cannot_read_components`, naming the
+  account and the file. Put scry somewhere every local account can read, such as under
+  `C:\ProgramData`, or grant the account read access to the folder.
 
 ## Security, authorization and limits
 
@@ -848,7 +855,7 @@ against. The summary:
 
 Scry.NET permits deliberate code execution and state mutation inside the target. It is **tooling for development and testing**, not a remote administration service. That is a statement about authorization, not a technical limit: attach works against Release builds as readily as Debug ones, because nothing in the path reads debug symbols - `CreateRemoteThread`/`LoadLibrary` is an operating-system facility, `ExecuteInDefaultAppDomain` is a CLR hosting API, and Roslyn compiles against metadata, which is identical either way. Two differences are worth knowing when targeting a Release build: an obfuscated assembly breaks expressions that name members, and `#if DEBUG` code is absent, so the application itself can behave differently.
 
-**By default every endpoint is local-only, and that default is enforced by the operating system.** Pipe names and tokens are random, and capability tokens are stored only in the current user's rendezvous directory. Modern .NET uses `PipeOptions.CurrentUserOnly`; .NET Framework creates a protected pipe DACL granting only the current Windows SID - so Windows refuses the pipe to any other user before a byte is read, independently of the token.
+**By default every endpoint is local-only, and that default is enforced by the operating system.** Pipe names and tokens are random, and capability tokens are stored only in the current user's rendezvous directory. Modern .NET uses `PipeOptions.CurrentUserOnly`; .NET Framework creates a protected pipe DACL granting only the current Windows SID - so Windows refuses the pipe to any other user before a byte is read, independently of the token. The descriptor file is written with its own protected DACL - the writing account, Administrators and SYSTEM only - so the token is not exposed by the directory it sits in, even a world-readable one.
 
 **Opting into a TCP listener changes that boundary, and only you can opt in.** `TcpPort` is `null` unless set, and it binds loopback only - never a routable address - so the endpoint is still unreachable from another machine without a port forward that you establish. But a loopback socket has no `CurrentUserOnly` equivalent and no DACL: once enabled, any local process running as any Windows user can attempt a handshake, and the 256-bit capability token becomes the only gate. Reaching such an endpoint across machines therefore means the token crosses machines inside the descriptor, which makes that file a bearer credential granting code-execution-equivalent access to the process for as long as the endpoint runs. Treat it accordingly, and delete it when you are done. Do not expose descriptors or bridge the protocol to untrusted clients, and prefer the pipe wherever the caller really is local.
 

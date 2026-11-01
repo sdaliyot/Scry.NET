@@ -36,7 +36,14 @@ public enum InjectionErrorCode
     /// The .NET Framework target's own assembly binding policy would downgrade one of the payload's
     /// dependencies. Injecting anyway would fail inside the target process rather than here.
     /// </summary>
-    BindingConflict
+    BindingConflict,
+
+    /// <summary>
+    /// The target's own account cannot read the native helper or the managed payload. Both are
+    /// loaded from inside the target, under its token, so injecting anyway would fail there with no
+    /// explanation beyond a null module handle.
+    /// </summary>
+    TargetCannotReadComponents
 }
 
 public sealed record InjectionError

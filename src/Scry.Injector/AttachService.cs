@@ -102,6 +102,7 @@ public static class AttachService
             }
 
             var components = ResolveComponents(inspection, selected.ComponentRoot);
+            EnsureTargetCanReadComponents(processId, components, selected.ComponentRoot);
 
             // Refuse before writing anything into the target. A binding downgrade cannot be
             // detected or recovered from once the payload is running, and the failure would
@@ -239,6 +240,60 @@ public static class AttachService
             error.Message,
             error.NativeError,
             error.Detail is null ? detail : error.Detail + " " + detail);
+    }
+
+    /// <summary>
+    /// Refuses an attach whose components the target's own account cannot read. The helper and the
+    /// payload are loaded inside the target under its token, so the elevated injector being able to
+    /// read them proves nothing - the classic case is a service running as a domain account and a
+    /// scry install under an administrator's profile, which works against a LocalSystem service and
+    /// fails against that one with only "LoadLibraryW did not load the native helper". Only a definite
+    /// denial refuses; see <see cref="TargetFileAccess"/>.
+    /// </summary>
+    private static void EnsureTargetCanReadComponents(
+        int processId,
+        BootstrapComponents components,
+        string componentRoot)
+    {
+        // Same local Windows guard as AppendIdentityDiagnostic, for the same analyzer reason.
+#if NETFRAMEWORK
+        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+#else
+        if (!OperatingSystem.IsWindows())
+#endif
+        {
+            return;
+        }
+
+        var files = new List<(string Path, uint Access)>
+        {
+            (components.HelperPath, TargetFileAccess.ReadAndExecuteAccess),
+            (components.AssemblyPath, TargetFileAccess.ReadAccess)
+        };
+        if (components.RuntimeConfigPath is not null)
+        {
+            files.Add((components.RuntimeConfigPath, TargetFileAccess.ReadAccess));
+        }
+
+        var denied = TargetFileAccess.FindDenied(processId, files);
+        if (denied is null)
+        {
+            return;
+        }
+
+        var user = ProcessIdentity.TryGet(processId);
+        var grantee = user is null ? "<target identity>" : user.Account ?? "*" + user.Sid;
+        var root = Path.GetFullPath(componentRoot).TrimEnd(Path.DirectorySeparatorChar);
+        var shared = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        throw new InjectionException(
+            InjectionErrorCode.TargetCannotReadComponents,
+            $"The target process runs as {user?.ToString() ?? "an account"} that cannot read " +
+            $"'{denied}'. Scry's native helper and payload are loaded inside the target under its " +
+            "own account, not this injector's, so that account must be able to read them. Copy the " +
+            $"scry folder somewhere it can read - a folder under '{shared}' is readable by every " +
+            "local account by default - and attach from the copy, or grant it access with: " +
+            $"icacls \"{root}\" /grant \"{grantee}\":(OI)(CI)RX",
+            detail: denied);
     }
 
     private static async Task<(ConnectionDescriptor Descriptor, string Path)?> FindDescriptorAsync(

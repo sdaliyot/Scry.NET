@@ -1124,7 +1124,7 @@ being remote.
 
 **Install them once, do not re-transcribe them every session.** Check
 `%LOCALAPPDATA%\Scry.NET\ScryRemote.ps1`: if it is missing, or its first line is not
-`# ScryRemote 1`, write the code block below to that path verbatim. Then dot-source it:
+`# ScryRemote 2`, write the code block below to that path verbatim. Then dot-source it:
 
 ```powershell
 . "$env:LOCALAPPDATA\Scry.NET\ScryRemote.ps1"
@@ -1161,7 +1161,7 @@ domain-joined target reached by name. A bare IP address or a workgroup machine a
 one of the two routes above.
 
 ```powershell
-# ScryRemote 1
+# ScryRemote 2
 
 function Connect-ScryRemote {
     [CmdletBinding()]
@@ -1292,41 +1292,52 @@ public static extern bool IsWow64Process(System.IntPtr hProcess, out bool wow64P
             Write-Host "IIS worker: attaching with --appdomain auto."
         }
 
-        # 2. Make sure a matching scry.exe exists on the remote machine. Copy this machine's own
-        #    install over the session rather than having the target download anything.
-        $remoteExe = Invoke-Command -Session $session -ArgumentList $architecture -ScriptBlock {
-            param($arch)
-            $name = if ($arch -eq "x86") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
-            foreach ($scope in 'Process', 'User', 'Machine') {
-                $dir = [Environment]::GetEnvironmentVariable($name, $scope)
-                if (![string]::IsNullOrWhiteSpace($dir)) {
-                    $candidate = Join-Path $dir "scry.exe"
-                    if (Test-Path $candidate) { return $candidate }
-                }
+        # 2. Make sure a matching scry.exe exists on the remote machine, in a folder the *target's*
+        #    account can read. The native helper and payload are loaded inside the target under
+        #    its own token, so an install under the connecting user's profile works against a
+        #    LocalSystem service and fails against one running as a domain account. ProgramData is
+        #    readable by every local account by default. The folder is versioned, so installing a
+        #    newer copy never has to overwrite files an already-attached target still has loaded.
+        #    This machine's own install is copied over the session; the target downloads nothing.
+        $localExe = Resolve-ScryCli -Architecture $architecture
+        $localDir = Split-Path $localExe -Parent
+        $version = (& $localExe --version).Trim()
+        $remoteDir = Invoke-Command -Session $session -ArgumentList $version, $architecture `
+            -ScriptBlock {
+                param($ver, $arch)
+                return (Join-Path $env:ProgramData "Scry.NET\cli\$ver\$arch")
             }
-            return $null
+        $installed = Invoke-Command -Session $session -ArgumentList $remoteDir -ScriptBlock {
+            param($dir)
+            # Readable by every account, writable only by administrators. ProgramData itself lets
+            # Users *create* files in subfolders, and anything a non-administrator could add here
+            # would be loaded by an elevated scry.exe or by the target - so the inherited ACL is
+            # replaced, on every connect, which also corrects an install made before this existed.
+            # Well-known SIDs (SYSTEM, Administrators, Users) so it works in any display language.
+            $root = Join-Path $env:ProgramData "Scry.NET\cli"
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            icacls $root /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" `
+                "*S-1-5-32-545:(OI)(CI)RX" /Q | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not restrict the ACL on $root (icacls exit $LASTEXITCODE)." }
+            Test-Path (Join-Path $dir "scry.exe")
         }
 
-        if (-not $remoteExe) {
-            $localExe = Resolve-ScryCli -Architecture $architecture
-            $localDir = Split-Path $localExe -Parent
-            $remoteDir = Invoke-Command -Session $session -ArgumentList $architecture -ScriptBlock {
-                param($arch)
-                $dir = Join-Path $env:LOCALAPPDATA "Scry.NET\$arch"
-                New-Item -ItemType Directory -Force -Path $dir | Out-Null
-                return $dir
+        if (-not $installed) {
+            # Copy into a staging folder and rename it into place last, so an interrupted copy can
+            # never leave a half-populated folder that the check above would then trust.
+            Invoke-Command -Session $session -ArgumentList $remoteDir -ScriptBlock {
+                param($dir)
+                Remove-Item "$dir.partial" -Recurse -Force -ErrorAction SilentlyContinue
+                New-Item -ItemType Directory -Force -Path "$dir.partial" | Out-Null
             }
-            Write-Host "Copying scry ($architecture) to $ComputerName`:$remoteDir"
-            Copy-Item -Path (Join-Path $localDir "*") -Destination $remoteDir `
+            Write-Host "Copying scry $version ($architecture) to $ComputerName`:$remoteDir"
+            Copy-Item -Path (Join-Path $localDir "*") -Destination "$remoteDir.partial" `
                 -ToSession $session -Recurse -Force
-            $remoteExe = Invoke-Command -Session $session -ArgumentList $architecture, $remoteDir `
-                -ScriptBlock {
-                    param($arch, $dir)
-                    $name = if ($arch -eq "x86") { "SCRY_HOME_X86" } else { "SCRY_HOME_X64" }
-                    [Environment]::SetEnvironmentVariable($name, $dir, 'User')
-                    return (Join-Path $dir "scry.exe")
-                }
+            Invoke-Command -Session $session -ArgumentList $remoteDir -ScriptBlock {
+                param($dir) Rename-Item "$dir.partial" (Split-Path $dir -Leaf)
+            }
         }
+        $remoteExe = Join-Path $remoteDir "scry.exe"
 
         # 3. Attach on the remote machine. --tcp-port 0 is mandatory for a forward to exist at all,
         #    and --targets-dir keeps the descriptor somewhere both identities can reach.
@@ -1673,7 +1684,13 @@ on `scry attach`, and that **same** `--targets-dir` on every command afterward, 
 identity that created it - a cross-identity attach can only ever be verified over TCP, never the
 pipe, no exceptions. If `--targets-dir` was given but the target's identity still cannot write to
 it, grant access once with `icacls <path> /grant "<target identity>":(OI)(CI)M`; Scry never
-modifies permissions itself. See
+modifies permissions itself. The target's identity must also be able to **read the scry folder
+itself**: the native helper and payload are loaded inside the target under its own account, not
+yours, so an install under your profile (where `Resolve-ScryCli` puts it by default) works against
+a LocalSystem service and fails against one running as a domain account. `scry attach` checks this
+before injecting and refuses with `target_cannot_read_components`, naming the account and file;
+copy the scry folder somewhere that account can read, such as under `C:\ProgramData`, and attach
+from the copy. See
 [`README.md`, "Attaching to a service or IIS application pool"](../../README.md#attaching-to-a-service-or-iis-application-pool).
 
 ## Reaching a chosen AppDomain (.NET Framework)
@@ -1702,6 +1719,9 @@ Use the error code before the message:
   `scry help <command>` or `scry schema`.
 - `target_not_found`: rediscover; an old target may have exited or an alias may be
   ambiguous.
+- `target_cannot_read_components` (attach): the target's account cannot read the scry folder.
+  Nothing was injected, so retrying from a readable copy is safe - tell the user which account and
+  folder the message names rather than changing permissions yourself.
 - `operation_not_found`: refresh capabilities; do not invent registered operation names.
 - `operation_not_supported`: the target/CLI protocol surface does not support that core
   operation.

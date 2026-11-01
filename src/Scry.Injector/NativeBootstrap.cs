@@ -194,7 +194,10 @@ internal static class NativeBootstrap
         {
             throw new InjectionException(
                 InjectionErrorCode.LoaderFailed,
-                "LoadLibraryW did not load the native helper. The target may enforce a DLL policy or endpoint security may have blocked the load.");
+                $"LoadLibraryW did not load the native helper '{helperPath}'. It is loaded under " +
+                "the target's own account, so first confirm that account can read it; otherwise a " +
+                "code-integrity (WDAC), AppLocker or exploit-protection policy on the target, or " +
+                "endpoint security, may have blocked the load.");
         }
 
         return FindModule(processId, Path.GetFileName(helperPath))?.BaseAddress

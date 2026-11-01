@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -783,8 +784,84 @@ public sealed class RuntimeHost : IAsyncDisposable, IDisposable
         Directory.CreateDirectory(_targetsDirectory);
         var temporaryPath = $"{DescriptorPath}.{Guid.NewGuid():N}.tmp";
         var json = JsonSerializer.Serialize(Descriptor, ScryJson.Options);
-        File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
-        File.Move(temporaryPath, DescriptorPath);
+        var bytes = new UTF8Encoding(false).GetBytes(json);
+
+        // The capability token in this file is the whole of the endpoint's access control: anyone
+        // who can read the file can drive the target. The targets directory is often one the caller
+        // chose and left world-readable - the remote-scrying rendezvous folder inherits
+        // Authenticated Users (M) from the volume root - so the descriptor is given its own
+        // protected DACL (the writing account, Administrators and SYSTEM only) instead of inheriting
+        // whatever the directory grants. It is created restricted rather than written then
+        // restricted, so the token never sits on disk under an inherited DACL, even for an instant.
+        try
+        {
+#if NETFRAMEWORK
+            WriteRestrictedDescriptor(temporaryPath, bytes);
+#else
+            if (OperatingSystem.IsWindows())
+            {
+                WriteRestrictedDescriptor(temporaryPath, bytes);
+            }
+            else
+            {
+                File.WriteAllBytes(temporaryPath, bytes);
+            }
+#endif
+            File.Move(temporaryPath, DescriptorPath);
+        }
+        catch
+        {
+            TryDeleteFile(temporaryPath);
+            throw;
+        }
+    }
+
+    // SYSTEM and the local Administrators group, by well-known SID so it holds under any locale. The
+    // writing account (the target's own identity) is added as the owner's explicit ACE; it is the
+    // one principal that must both write the descriptor here and read it back from inside the target.
+#if !NETFRAMEWORK
+    [SupportedOSPlatform("windows")]
+#endif
+    private static void WriteRestrictedDescriptor(string path, byte[] bytes)
+    {
+        var owner = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("The current Windows identity has no security identifier.");
+
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (var sid in new[]
+                 {
+                     owner,
+                     new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                     new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)
+                 })
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                sid, FileSystemRights.FullControl, AccessControlType.Allow));
+        }
+
+#if NETFRAMEWORK
+        using var stream = new FileStream(
+            path, FileMode.CreateNew, FileSystemRights.WriteData, FileShare.None, 4096, FileOptions.None, security);
+#else
+        using var stream = new FileInfo(path).Create(
+            FileMode.CreateNew, FileSystemRights.WriteData, FileShare.None, 4096, FileOptions.None, security);
+#endif
+        stream.Write(bytes, 0, bytes.Length);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private void CleanupDescriptor()
