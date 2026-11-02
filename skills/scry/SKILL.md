@@ -33,6 +33,13 @@ if a newer one exists. Any failure to reach GitHub, or to replace a file still l
 `scry.exe` is currently injected into a running target, is not fatal - it just means "nothing
 changed this time"; the existing install (if any) is always what gets returned.
 
+It installs under `%ProgramData%\Scry.NET` (not `%LOCALAPPDATA%`), locked so only administrators,
+SYSTEM and the installing user can write. A machine-wide path is required because a packaged host -
+Claude Desktop is an MSIX app - redirects `%LOCALAPPDATA%` into its own per-package `LocalCache`,
+and a copy of scry there loads for the host but not into a separate target process; `%ProgramData%`
+is not virtualized that way and is readable by every local identity, including a service-account
+target. An existing install that resolved into such a package sandbox is discarded and replaced.
+
 > [!IMPORTANT]
 > **Check Process, User, and Machine scopes:**
 > Environment variables defined or modified by the user or an installer after your agent session
@@ -74,7 +81,18 @@ changed this time"; the existing install (if any) is always what gets returned.
 >         Write-Host "Resolved scry.exe path: $exePath"
 >     }
 >
->     $targetDir = if ($exePath) { Split-Path $exePath -Parent } else { Join-Path $env:LOCALAPPDATA "Scry.NET\$Architecture" }
+>     # A packaged host (MSIX - Claude Desktop is one) redirects LocalApplicationData into its own
+>     # per-package ...\Packages\<id>\LocalCache\Local. scry installed there loads for the host but
+>     # not into a separate target process, so it must never be the install location. Discard an
+>     # existing install that resolved into such a sandbox, and install under ProgramData instead:
+>     # machine-wide, not virtualized by packaging, and readable by every local identity (including a
+>     # service-account target). CommonApplicationData, not $env:ProgramData, for the same reason.
+>     if ($exePath -and $exePath -match '\\Packages\\[^\\]+\\LocalCache\\') {
+>         Write-Host "Ignoring sandboxed scry.exe at $exePath (packaged-app LocalCache)."
+>         $exePath = $null
+>     }
+>     $installRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) "Scry.NET"
+>     $targetDir = if ($exePath) { Split-Path $exePath -Parent } else { Join-Path $installRoot $Architecture }
 >     $stampPath = Join-Path $targetDir ".scry-last-checked"
 >
 >     # 2. Skip the network entirely if we already checked within the last 24h.
@@ -160,6 +178,11 @@ changed this time"; the existing install (if any) is always what gets returned.
 >         Remove-Item $renamedOld -Recurse -Force -ErrorAction SilentlyContinue
 >     }
 >
+>     # Harden the ProgramData install so no other local user can plant a DLL that an elevated
+>     # scry.exe or the target would then load. Only when we installed under the ProgramData root we
+>     # own - never a folder the user pointed SCRY_HOME at themselves.
+>     if ($targetDir -like (Join-Path $installRoot '*')) { Set-ScryInstallRootAcl -Root $installRoot }
+>
 >     Set-Content $stampPath (Get-Date -Format "o")
 >     [Environment]::SetEnvironmentVariable($envVar, $targetDir, 'User')
 >     Set-Item "env:$envVar" $targetDir
@@ -167,6 +190,29 @@ changed this time"; the existing install (if any) is always what gets returned.
 >     $newExe = Join-Path $targetDir "scry.exe"
 >     Write-Host "scry ready at $newExe ($($release.tag_name))"
 >     return $newExe
+> }
+>
+> function Set-ScryInstallRootAcl {
+>     [CmdletBinding()]
+>     param(
+>         [Parameter(Mandatory)][string]$Root,
+>         # Connect-ScryRemote installs as an administrator and wants a hard failure; a local install
+>         # may be an ordinary user hardening their own folder, where a best-effort warning is better.
+>         [switch]$ThrowOnFailure
+>     )
+>     New-Item -ItemType Directory -Force -Path $Root | Out-Null
+>     # Well-known SIDs so it holds in any display language: SYSTEM and Administrators full, Users
+>     # read+execute only. The installing user is granted full as well, so a non-administrator can
+>     # still update their own install while no other non-administrator can write into (and plant a
+>     # DLL in) it. Connect-ScryRemote applies the same rule to its remote ProgramData install.
+>     $me = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+>     icacls $Root /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" `
+>         "*S-1-5-32-545:(OI)(CI)RX" "*${me}:(OI)(CI)F" /Q | Out-Null
+>     if ($LASTEXITCODE -ne 0) {
+>         $message = "Could not restrict the ACL on $Root (icacls exit $LASTEXITCODE)."
+>         if ($ThrowOnFailure) { throw $message }
+>         Write-Host "$message The install still works; run once from an elevated prompt to harden it."
+>     }
 > }
 > ```
 
