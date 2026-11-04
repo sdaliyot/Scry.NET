@@ -719,8 +719,8 @@ it added - see
    ```
    `TcpPort` is `null` by default in both modes, which starts no listener at all - the named pipe
    only. Nothing becomes TCP-reachable unless you ask for it.
-2. **Copy the descriptor** from the remote machine (`%LOCALAPPDATA%\Scry\targets\<id>.json`) to the local
-   machine, to a path *outside* its own `%LOCALAPPDATA%\Scry\targets` - `Invoke-Command` with `Copy-Item`
+2. **Copy the descriptor** from the remote machine (`%USERPROFILE%\.scry\targets\<id>.json`) to the local
+   machine, to a path *outside* its own `%USERPROFILE%\.scry\targets` - `Invoke-Command` with `Copy-Item`
    is the suggested route. That file is a bearer credential: whoever holds it can drive the target for the
    rest of the endpoint's lifetime, so delete it once you are done.
 3. **Establish a port forward** from the local machine to the target's bound port. `ssh -L
@@ -746,7 +746,7 @@ it added - see
    scry evaluate --descriptor .\remote-target.json --address 127.0.0.1:9000 --source "1 + 1"
    ```
    `--target <alias>` can never work here: discovery only ever looks at the local
-   `%LOCALAPPDATA%\Scry\targets` directory, so it cannot surface a target that lives on another
+   `%USERPROFILE%\.scry\targets` directory, so it cannot surface a target that lives on another
    machine. `--address` also accepts a bare port (host defaults to `127.0.0.1`) or `auto`, meaning
    "use the descriptor's own published TCP address and port" - useful when there is no forward
    remapping the port. The flagship shape of this is a single `scry scenario` call whose commands
@@ -765,7 +765,7 @@ endpoint runs. See [`docs/threat-model.md`](docs/threat-model.md) for the full r
 %%{init: {"flowchart": {"subGraphTitleMargin": {"top": 6, "bottom": 12}}} }%%
 flowchart TB
   subgraph agentMachine["Agent / test machine"]
-    desc["Copied descriptor file<br/>carries the capability token<br/>(outside %LOCALAPPDATA%/Scry/targets)"]
+    desc["Copied descriptor file<br/>carries the capability token<br/>(outside %USERPROFILE%/.scry/targets)"]
     driver["scry CLI, or your test code"]
     fwd["Port forward client<br/>ssh -L / netsh portproxy"]
   end

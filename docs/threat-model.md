@@ -20,9 +20,9 @@ it, and what does the target's own log say happened afterward."
   (`RuntimeHost.cs`), transmitted once at handshake, and never written to disk outside the
   connection descriptor. Possessing it is equivalent to possessing full access to that endpoint for
   its lifetime.
-- **The connection descriptor** (`%LOCALAPPDATA%\Scry\targets\<targetId>.json`), which carries the
+- **The connection descriptor** (`%USERPROFILE%\.scry\targets\<targetId>.json`), which carries the
   token in plain text. Anyone who can read that file has the same access as the target's own user.
-- **The audit log** (`%LOCALAPPDATA%\Scry\audit\*.jsonl`, see below), which is a record of what
+- **The audit log** (`%USERPROFILE%\.scry\audit\*.jsonl`, see below), which is a record of what
   happened - valuable to an investigator, and a target for tampering by anyone with write access to
   it.
 
@@ -63,7 +63,7 @@ around after the task that needed it is done - delete it.
 
 **A caller-chosen rendezvous directory (`RuntimeHostOptions.TargetsDirectory` / `--targets-dir`)
 moves the token-bearing descriptor out of the one location the OS already scopes to a single
-Windows user.** The default directory, `%LOCALAPPDATA%\Scry\targets`, inherits its access control
+Windows user.** The default directory, `%USERPROFILE%\.scry\targets`, inherits its access control
 from the user profile it lives under - only that user (and an administrator) can read it without
 extra effort. A directory chosen to let two different identities agree on where to publish carries
 no such guarantee. The descriptor file closes most of that gap by itself: the runtime creates it
@@ -95,7 +95,7 @@ would gate any other capability you don't want reachable in production.
 ## What the audit log proves, and what it does not
 
 Every connection, handshake attempt, and operation is recorded to
-`%LOCALAPPDATA%\Scry\audit\*.jsonl` by default (`AuditLog`, `Scry.Runtime`), specifically so a
+`%USERPROFILE%\.scry\audit\*.jsonl` by default (`AuditLog`, `Scry.Runtime`), specifically so a
 rejected authentication - previously invisible entirely - leaves a trace. Three honest limits:
 
 - **`clientName` is self-asserted, not authenticated.** It is whatever the connecting client claims

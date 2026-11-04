@@ -42,7 +42,7 @@ internal static class CliContract
             "path",
             false,
             "Absolute rendezvous directory to resolve --target against, overriding the default " +
-            "(%LOCALAPPDATA%\\Scry\\targets). Needed together with 'scry attach --targets-dir' " +
+            "(%USERPROFILE%\\.scry\\targets). Needed together with 'scry attach --targets-dir' " +
             "whenever the target runs under a different Windows identity than this command - an " +
             "IIS application pool or a service account - since that identity's default directory " +
             "is not this one's."),
@@ -128,7 +128,7 @@ internal static class CliContract
                     "path",
                     false,
                     "Absolute directory to publish the descriptor and bootstrap diagnostics into, " +
-                    "overriding the default (%LOCALAPPDATA%\\Scry\\targets). Required whenever the " +
+                    "overriding the default (%USERPROFILE%\\.scry\\targets). Required whenever the " +
                     "target process runs under a Windows identity with no loaded user profile - an " +
                     "IIS application pool with loadUserProfile=\"false\", or a service account - " +
                     "since that identity's default directory does not resolve to a usable path; " +

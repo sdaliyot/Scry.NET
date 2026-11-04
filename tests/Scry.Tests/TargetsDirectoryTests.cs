@@ -68,6 +68,30 @@ public sealed class TargetsDirectoryTests
     }
 
     [Fact]
+    public void Default_directory_is_under_the_profile_root_not_localappdata()
+    {
+        // The default must resolve under %USERPROFILE%, never %LOCALAPPDATA%: a packaged (MSIX) host
+        // redirects LocalApplicationData into its per-package LocalCache, so a descriptor published
+        // there is invisible to a CLI run from a normal terminal. The profile root is not
+        // virtualized, so both contexts resolve the same path. This guards against regressing the
+        // default back to %LOCALAPPDATA%.
+        var resolved = TargetDiscovery.ResolveDirectory(null);
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        Assert.StartsWith(profile, resolved, StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith(Path.Combine(".scry", "targets"), resolved, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("LocalCache", resolved, StringComparison.OrdinalIgnoreCase);
+
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrEmpty(localAppData))
+        {
+            Assert.False(
+                resolved.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase),
+                "The default rendezvous directory must not be under %LOCALAPPDATA% (MSIX redirects it).");
+        }
+    }
+
+    [Fact]
     public void An_invalid_override_leaves_no_TCP_listener_bound()
     {
         // A free port, reserved by binding and releasing it, so the assertion below (rebinding the

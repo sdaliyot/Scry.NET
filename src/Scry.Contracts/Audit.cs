@@ -121,10 +121,14 @@ public static class AuditOutcomes
 /// </summary>
 public static class AuditPaths
 {
+    // %USERPROFILE%\.scry\audit, a sibling of the targets directory. It is under the profile root
+    // rather than %LOCALAPPDATA% for the same reason TargetDiscovery.DirectoryPath is: a packaged
+    // (MSIX) host redirects %LOCALAPPDATA% per-package, so a log written there from one context is
+    // invisible to a reader in another. The profile root is not virtualized that way.
     public static string DirectoryPath =>
         Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Scry",
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".scry",
             "audit");
 
     /// <summary>

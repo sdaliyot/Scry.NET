@@ -60,7 +60,7 @@ public sealed class RuntimeHostOptions
     public int MaximumHookCapacity { get; init; } = 10_000;
 
     /// <summary>
-    /// Whether to write the rolling audit file under <c>%LOCALAPPDATA%\Scry\audit</c>. On by
+    /// Whether to write the rolling audit file under <c>%USERPROFILE%\.scry\audit</c>. On by
     /// default, deliberately: attach mode cannot be configured by the target application (it does
     /// not cooperate), so a zero-configuration default is the only way an injected endpoint is
     /// auditable at all.
@@ -77,7 +77,7 @@ public sealed class RuntimeHostOptions
     /// <para>
     /// Needed whenever the endpoint's process runs under an identity with no loaded user profile -
     /// an IIS application pool with <c>loadUserProfile="false"</c>, or a service account - because
-    /// <c>Environment.SpecialFolder.LocalApplicationData</c> then resolves to an empty path, and
+    /// <c>Environment.SpecialFolder.UserProfile</c> then resolves to an empty path, and
     /// because the tooling attaching from a different identity would otherwise look in its own
     /// default directory rather than this endpoint's. Must be an absolute path both this process's
     /// identity and the attaching tool's identity can write to.

@@ -7,16 +7,24 @@ namespace Scry.Contracts;
 public static class TargetDiscovery
 {
     /// <summary>
-    /// The default rendezvous directory. Can resolve to a <em>relative</em> path - <c>Scry\targets</c>
-    /// - when <see cref="Environment.SpecialFolder.LocalApplicationData"/> returns an empty string,
-    /// which happens under an identity with no loaded user profile (an IIS application pool with
+    /// The default rendezvous directory, <c>%USERPROFILE%\.scry\targets</c>. It lives directly under
+    /// the profile root rather than <c>%LOCALAPPDATA%</c> on purpose: a packaged (MSIX) host - Claude
+    /// Desktop is one - redirects a process's <c>%LOCALAPPDATA%</c> into its own per-package
+    /// <c>LocalCache</c>, so a target that published there and a CLI launched from a normal terminal
+    /// would resolve two different folders and never find each other. The profile root is not
+    /// virtualized that way, so both contexts resolve the same real path for the same user.
+    /// <para>
+    /// Can still resolve to a <em>relative</em> path - <c>.scry\targets</c> - when
+    /// <see cref="Environment.SpecialFolder.UserProfile"/> returns an empty string, which happens
+    /// under an identity with no loaded user profile (an IIS application pool with
     /// <c>loadUserProfile="false"</c>, or a service account). Callers that need a guaranteed-rooted
     /// path should go through <see cref="ResolveDirectory"/> instead of reading this directly.
+    /// </para>
     /// </summary>
     public static string DirectoryPath =>
         Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Scry",
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".scry",
             "targets");
 
     /// <summary>
@@ -52,7 +60,7 @@ public static class TargetDiscovery
         {
             throw new InvalidOperationException(
                 $"The Scry rendezvous directory resolved to the relative path '{defaultPath}' and " +
-                "must be absolute. Environment.SpecialFolder.LocalApplicationData returned an " +
+                "must be absolute. Environment.SpecialFolder.UserProfile returned an " +
                 "empty path, which happens when a process runs under an identity with no loaded " +
                 "user profile - an IIS application pool with loadUserProfile=\"false\", or a " +
                 "service account. Set RuntimeHostOptions.TargetsDirectory " +

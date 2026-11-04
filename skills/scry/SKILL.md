@@ -1105,7 +1105,7 @@ idempotent items after rediscovery; do not repeat successful mutations.
 ## Reaching a target on another machine
 
 `scry discover` and `--target <alias>` only ever look at the local
-`%LOCALAPPDATA%\Scry\targets` directory - they can never surface a target that lives on another
+`%USERPROFILE%\.scry\targets` directory - they can never surface a target that lives on another
 machine. A remote target is always addressed with `--descriptor <path>` (the copied descriptor
 file, kept outside the local targets directory) plus `--address <host:port|port|auto>`, never with
 `--target`.

@@ -60,7 +60,7 @@ public sealed class EndpointOptions
     public int MaximumHookCapacity { get; init; } = 10_000;
 
     /// <summary>
-    /// Whether to write the rolling audit file under <c>%LOCALAPPDATA%\Scry\audit</c>. On by
+    /// Whether to write the rolling audit file under <c>%USERPROFILE%\.scry\audit</c>. On by
     /// default, deliberately: attach mode cannot be configured by the target application (it does
     /// not cooperate), so a zero-configuration default is the only way an injected endpoint is
     /// auditable at all.
