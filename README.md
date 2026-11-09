@@ -13,6 +13,8 @@ reason about what a change probably did. Automated tests can reach past the UI i
 behind it. And a process stuck in a bad state can be examined while the problem is happening, to
 pinpoint the cause, rather than restarted in the hope of catching it next time.**
 
+Its sibling, [Scry.Rust](https://github.com/sdaliyot/Scry.Rust), does the same for Rust applications.
+
 <br clear="left"/>
 
 Connect to a running application and read its actual object graph, write to it, call its methods,
